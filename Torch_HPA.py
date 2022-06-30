@@ -28,7 +28,6 @@ from PIL import Image
 import cv2
 import math
 
-
 import joblib
 from tqdm.auto import tqdm
 print('cuda on : ', torch.cuda.is_available())
