@@ -3,7 +3,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-import zipfile
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -11,24 +10,17 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchcontrib.optim import SWA
 from torch.optim.lr_scheduler import _LRScheduler
-from torchcontrib.optim import SWA
-   
-from sklearn.metrics import recall_score
-from sklearn.utils import shuffle
-from sklearn.model_selection import RepeatedStratifiedKFold
+
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 from sklearn.metrics import f1_score
 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-import matplotlib.pyplot as plt
-import seaborn as sns
 from PIL import Image
-import cv2
 import math
+import gc
 
-import joblib
 from tqdm.auto import tqdm
 print('cuda on : ', torch.cuda.is_available())
 
@@ -70,17 +62,13 @@ name_label_dict = {
 # config
 
 index = 0
-HEIGHT = 224
-WIDTH = 224
+HEIGHT = 240
+WIDTH = 240
 
-data_dir = "../Inputs/human-protein-atlas-image-classification/"
+data_dir = "../inputs/human-protein-atlas-image-classification/"
 
 
 df_train = pd.read_csv(f'{data_dir}/train.csv')
-
-
-# # EDA
-
 
 reverse_train_labels = dict((v,k) for k,v in name_label_dict.items())
 
@@ -97,13 +85,10 @@ def fill_targets(row):
 df_train = df_train.apply(fill_targets, axis=1)   #label_dict와 Target match
 
 
-# 멀티 레이블을 가지는 사진의 비율 시각화, 1장의 image가 가지는 최대 레이블은 5개,   1~3개의 label을 가지는 비율이 90%에 가까움
-
 df_train["number_of_targets"] = df_train.drop(["Id", "Target"],axis=1).sum(axis=1)
 count_perc = np.round(100 * df_train["number_of_targets"].value_counts() / df_train.shape[0], 2)
 
 # # DataSet Split
-
 train_files = os.listdir(f"{data_dir}/train")
 test_files = os.listdir(f"{data_dir}/test")
 percentage = np.round(len(test_files) / len(train_files) * 100)
@@ -112,28 +97,20 @@ print(f"train_data_set 대비 test_data_set이 {percentage} % 비율")
 
 # train  test 비율 38%  참고하여 3:1로 split
 # label의 bias가 높아 MultilabelStratifiedKFold 를 사용하여 균등하게 split
-
 mskf = MultilabelStratifiedKFold(n_splits= 4, shuffle=True, random_state= 42)
-
 
 df_train["fold"] = -1
 
-
 X = df_train['Id'].values
-
 y = df_train.iloc[:, 2:-2].values
-
 
 for i, (trn_idx, vld_idx) in enumerate(mskf.split(X, y)):
     df_train.loc[vld_idx, 'fold'] = i 
 
-
 df_train["fold"].value_counts()
-
 
 trn_fold = [i for i in range(4) if i not in [2]]
 vld_fold = [2]
-
 
 trn_idx = df_train.loc[df_train['fold'].isin(trn_fold)].index
 vld_idx = df_train.loc[df_train['fold'].isin(vld_fold)].index
@@ -159,16 +136,16 @@ class HPA_Dataset(Dataset):
 
   def __getitem__(self, index):
     img_id = self.img_ids[index]
-    img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
+    # img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
     img_green_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_green.png')
     img_blue_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_blue.png')
     img_yellow_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_yellow.png')
     
     img = np.stack([
-    np.array(img_red_ch), 
-    np.array(img_green_ch), 
-    np.array(img_blue_ch),
-    np.array(img_yellow_ch)], -1)
+    # np.array(img_red_ch),
+    np.array(img_yellow_ch),
+    np.array(img_green_ch),
+    np.array(img_blue_ch)], -1)
     
 #     img = cv2.resize(img, (self.img_height,  self.img_width)).astype(np.uint8)/255
 #     img = torch.Tensor(img).permute(2,0,1).numpy()
@@ -183,11 +160,8 @@ class HPA_Dataset(Dataset):
 
 
 # # Define augmentations
-
-# cutmix or cutout을 추가해서 실험할 예정
-
 train_aug = A.Compose([
-    A.Resize(224, 224),
+    A.Resize(HEIGHT, WIDTH),
     A.OneOf([
       A.HorizontalFlip(p=0.3),
       A.RandomRotate90(p=0.3),
@@ -198,29 +172,19 @@ train_aug = A.Compose([
       A.OpticalDistortion(p=0.3),
       A.GaussNoise(p=0.3)                 
     ], p=0.4),
-#     A.Normalize([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814]),
+    # A.Normalize([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814]),
+    A.Normalize([0.08282, 0.05258, 0.05487], [0.13814, 0.10145, 0.15313]),
     A.pytorch.transforms.ToTensorV2()
 ])
 
 vaild_aug = A.Compose([
-#     A.Normalize([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814]),
-    A.Resize(224,224),
+    A.Resize(HEIGHT,WIDTH),
+    A.Normalize([0.08282, 0.05258, 0.05487], [0.13814, 0.10145, 0.15313]),
     A.pytorch.transforms.ToTensorV2()
 ])
 
-
-# # Make dataloader
-
-# len(partitions)
-
-# TFrecod 로 파일을 변환해뒀으면 더 효육적이고 빠른 학습이 가능했을듯
-
-# for data in ['train', 'valid']:
-#     dataset = []
-#     for idx in range(len(partitions)):
-#         dataset.append(f'df_{data}_f{idx}')
-#     globals()[f'{data}_csv'] = dataset
 num  = 0 
+batch_size= 32
 def trn_dataset(num, is_test= False):
     trn_dataset = HPA_Dataset(csv =  df_train.iloc[trn_idx],
                                  img_height = HEIGHT,
@@ -243,18 +207,33 @@ def vld_dataset(num, is_test= False):
 def trn_loader(num, is_test= False):
     trn_loader = DataLoader(trn_dataset(num, is_test),
                            shuffle = True,
-                           num_workers = 4,
-                           batch_size = 24,
+                        #    num_workers = 2,
+                           batch_size = batch_size,
                            )
     return trn_loader
 
 def vld_loader(num, is_test= False):
     vld_loader = DataLoader(vld_dataset(num, is_test),
-                           num_workers = 4,
-                           batch_size = 24,
+                        #    num_workers = 2,
+                           batch_size = batch_size,
                            )
     return vld_loader
 
+def test_dataset(num, is_test= False):
+    test_dataset = HPA_Dataset(csv = num,
+                               img_height = HEIGHT,
+                               img_width = WIDTH,
+                               transform = vaild_aug,
+                               is_test = is_test,
+                               )
+    return test_dataset
+
+def test_loader(num, is_test= False):
+    test_loader = DataLoader(test_dataset(num, is_test),
+                            #  num_workers= 2,
+                             batch_size = batch_size,
+                             )
+    return test_loader
 # # Create model, opt, criterion
 import timm
 
@@ -262,43 +241,34 @@ import timm
 
 # https://github.com/lucidrains/vit-pytorch
 
-class ViT(nn.Module):
+class Effic(nn.Module):
     def __init__(self, class_n=28):
         super().__init__()
-        self.model = timm.create_model('vit_base_patch16_224', pretrained=True, num_classes=28, in_chans= 3)
+        self.model = timm.create_model('swsl_resnext50_32x4d', pretrained=True, num_classes=28)
         
-        w = self.model.patch_embed.proj.weight
-        self.model.patch_embed.proj = nn.Conv2d(4, 768, kernel_size=(16, 16), stride=(16, 16))
-        self.model.patch_embed.proj.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(768,1,16,16)),dim=1))       
+        # w = self.model.conv_stem.weight
+        # self.model.conv_stem = nn.Conv2d(4, 32, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+        # self.model.conv_stem.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(32,1,3,3)),dim=1))
         
-#         self.model.pre_logits = nn.Sequential(nn.Dropout(0.5), nn.Linear(in_features=768, out_features=768, bias=True), nn.GELU(),
-#                                              nn.LayerNorm((768,), eps=1e-06, elementwise_affine=True), nn.Dropout(0.5),)
+        # self.model.classifier = nn.Sequential(nn.Dropout(0.5), nn.Linear(in_features=1280, out_features=28, bias=True))
 
     def forward(self, x):
         x = self.model(x)
         return x
-
-
-model = ViT()
-
 # ===========================================================================================
 # 8개까지 freeze()
 # requires_grad = False
 # for idx, params in enumerate(model.parameters()):
-#     if idx <= (155 - 8):
-#         params.requires_grad = False
+#    if idx <= (155 - 8):
+#        params.requires_grad = False
 
 # for i in filter(lambda p: p.requires_grad, model.parameters()):
-#     print(i.requires_grad)
-
+#    print(i.requires_grad)
 # ===========================================================================================
-
-model = model.cuda()
 
 # https://becominghuman.ai/investigating-focal-and-dice-loss-for-the-kaggle-2018-data-science-bowl-65fb9af4f36c
 # https://arxiv.org/pdf/1708.02002.pdf
 # 데이터 불균형에 적합한 loss funtion을 선택  1:10, 1000에 굉장히 유리하다는 평가가 있음.
-
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2):
         super().__init__()
@@ -317,26 +287,8 @@ class FocalLoss(nn.Module):
         loss = (invprobs * self.gamma).exp() * loss
         
         return loss.sum(dim=1).mean()
-    
-loss_fn = FocalLoss()
-
-
-
-#BCEWithLogitsLoss : threshold기준으로 [1,0,0,1,0]식으로 표현 하기위해 sigmoid가 결합된 Binary Cross Entropy를 선택
-
-# loss_fn = nn.BCEWithLogitsLoss()
-
-# scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-#                                                       mode='max',
-#                                                       verbose = True,
-#                                                       patience=3,
-#                                                       factor = 0.5,
-#                                                       threshold = 1e-2,
-#                                                        )
-
 
 # https://gaussian37.github.io/dl-pytorch-lr_scheduler/ 블로그 참조
-
 class CosineAnnealingWarmUpRestarts(_LRScheduler):
     def __init__(self, optimizer, T_0, T_mult=1, eta_max=0.1, T_up=0, gamma=1., last_epoch=-1):
         if T_0 <= 0 or not isinstance(T_0, int):
@@ -392,16 +344,6 @@ class CosineAnnealingWarmUpRestarts(_LRScheduler):
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
 
-# 학습전 최적의 lr find
-
-# from torch_lr_finder import LRFinder
-
-# optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-8, weight_decay=1e-2)
-# lr_finder = LRFinder(model, optimizer, loss_fn, device="cuda")
-# lr_finder.range_test(trn_loader(0), end_lr=200, num_iter=200)
-# lr_finder.plot() # to inspect the loss-learning rate graph
-# lr_finder.reset() # to reset the model and optimizer to their initial state
-
 # AdamW : 컴퓨터 비젼 task에서는 momentum을 포함한 SGD에 비해 일반화(generalization)가 많이 뒤쳐진다는 결과들이 있고
 # 멀티 클래스, 멀티 레이블, 클래스 불균형으로 인한 일반화에 더 집중된 옵티마이저가 유리하다고 판단.
 
@@ -409,11 +351,9 @@ class CosineAnnealingWarmUpRestarts(_LRScheduler):
      
 # lr finder 로 찾은 lr을 적용
 
-optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr = 3.51E-04)
+# optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr = 3.51E-04)
 # optimizer = torch.optim.SGD(model.parameters(), lr = 1.75E-04, momentum=0.9)
 # optimizer = SWA(optimizer, swa_start=10, swa_freq=5, swa_lr=1e-5)
-
-
 # model logit값 sigmoid로 0~1값 변환
 def sigmoid_np(x):
     return 1.0/(1.0 + np.exp(-x))
@@ -421,197 +361,137 @@ def sigmoid_np(x):
 
 # 초기 값은 0.4  -> model이 학습한 후 예측값을 기준으로 True 데이터 비율이 높고 False 데이터 비율이 낮은 최적의 Thresholds값을
 # labels 별로 각각 28개 구해서 진행
-Thresholds = 0.4
-
-# warmup!
-# final_score = []
-# for ep in range(1):
-#     train_loss = []
-#     val_loss = []
-#     val_true = []
-#     val_pred = []
-
-#     print(f'======================== {ep} warmup train start ========================') 
-
-#     model.train()
-#     for inputs, targets in tqdm(trn_loader(ep)):
-
-#         inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
-#         targets = targets.cuda() #정답 데이터
-#         logits = model(inputs.float()) # 결과값 
-#         # 변화도(Gradient) 매개변수를 0
-#         optimizer.zero_grad()
-#         # 순전파 + 역전파 + 최적화
-#         loss = loss_fn(logits,  targets.float())
-#         loss.backward()
-#         optimizer.step()
-#         train_loss.append(loss.item())
-#     model.eval()
-#     with torch.no_grad():
-#         for inputs, targets in tqdm(vld_loader(ep)):
-#             inputs = inputs.cuda()
-#             targets = targets.cuda()
-
-#             logits = model(inputs.float())
-
-#             loss = loss_fn(logits, targets.float())
-#             val_loss.append(loss.item())
-
-#             # 정답 비교 code
-#             pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-#             F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
-#             final_score.append(F1_score)
-
-#     Val_loss_ = np.mean(val_loss) 
-#     Train_loss_ = np.mean(train_loss)
-#     Final_score_ = np.mean(final_score)
-#     print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
-
-
-def run(model, optimizer, scheduler):
-    torch.multiprocessing.freeze_support()
-    best_score = -1
-    final_score = []
-    title = 'TW_ViT_model_Adam_pure'
-    lrs = []
-    early_stop = np.inf
-
-    for ep in range(60):
-        train_loss = []
-        val_loss = []
-        val_true = []
-        val_pred = []
-
-        print(f'======================== {ep} Epoch train start ========================') 
-
-
-        model.train()
-        for inputs, targets in tqdm(trn_loader(ep)):
-
-            inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
-            targets = targets.cuda() #정답 데이터
-            
-            # 변화도(Gradient) 매개변수를 0
-            optimizer.zero_grad()
-            logits = model(inputs.float()) # 결과값 
-
-            # 순전파 + 역전파 + 최적화
-            loss = loss_fn(logits,  targets.float())
-            loss.backward()
-            optimizer.step()
-            
-            train_loss.append(loss.item())
-            
-        model.eval()
-        with torch.no_grad():
-            for inputs, targets in tqdm(vld_loader(ep)):
-                inputs = inputs.cuda()
-                targets = targets.cuda()
-
-                logits = model(inputs.float())
-
-                loss = loss_fn(logits, targets.float())
-
-
-                val_loss.append(loss.item())
-
-                # 정답 비교 code
-                pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-                F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
-                final_score.append(F1_score)
-
-        Val_loss_ = np.mean(val_loss) 
-        Train_loss_ = np.mean(train_loss)
-        Final_score_ = np.mean(final_score)
-        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
-        scheduler.step()
-        lrs.append(optimizer.param_groups[0]['lr'])
-        print("lr: ", optimizer.param_groups[0]['lr'])
-        
-        if Final_score_ > best_score and early_stop > Val_loss_:
-            best_score = Final_score_
-            early_stop = Val_loss_
-            early_count = 0
-            state_dict = model.cpu().state_dict()
-            model = model.cuda()
-            torch.save(state_dict, f"../model/HPA/{title}_{ep}.pt")
-
-            print('\n SAVE MODEL UPDATE \n\n')
-        elif early_stop < Val_loss_ or Final_score_ < best_score:
-            early_count += 1
-
-        if early_count == 5:
-            print('early stop!!!')
-            break                   
-    return print("learning end")
-import gc
-
-torch.cuda.empty_cache()
-gc.collect()
 
 
 # unfreeze() 파라미터 requires_grad all true
 # for idx, params in enumerate(model.parameters()):
-#     params.requires_grad = True
+#    params.requires_grad = True
 
-optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-06)
-scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 15, T_mult=1, eta_max=1.0E-04,  T_up=3, gamma=0.5)
+def save_pred(pred, th=0.4, fname= 'model_name'):
+    pred_list = []
+    for line in (pred):
+        for idx in line:
+            s = ' '.join(list([str(i) for i in np.nonzero(idx >th)[0]]))
+            pred_list.append(s)
+    submit['Predicted'] = pred_list
+    submit.to_csv(f'../outputs/{fname}.csv',  index=False)
 
-if __name__ == '__main__':
-                         
-    run(model, optimizer, scheduler)
+if __name__ ==  "__main__" :
+    # 학습전 최적의 lr find
+    # from torch_lr_finder import LRFinder
+    #
+    # optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-8, weight_decay=1e-2)
+    # lr_finder = LRFinder(model, optimizer, loss_fn, device="cuda")
+    # lr_finder.range_test(trn_loader(0), end_lr=100, num_iter=100)
+    # lr_finder.plot() # to inspect the loss-learning rate graph
+    # lr_finder.reset() # to reset the model and optimizer to their initial state
+
+    Thresholds = 0.4
+    model = Effic()
+    model = model.cuda()
+    loss_fn = FocalLoss()
+
+    optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-06)
+    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 10, T_mult=1, eta_max=5.0E-03,  T_up=1, gamma=0.25)
+
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    best_score = -1
+    final_score = []
+    early_stop = np.inf
+    lrs = []
+    epoch = 50
+    title= "TW_Resnext_Adam_3ch_Y_"
+
+    # for ep in range(epoch):
+    #     train_loss = []
+    #     val_loss = []
+    #     val_true = []
+    #     val_pred = []
+
+    #     print(f'======================== {ep} Epoch train start ========================')
+    #     model.train()
+    #     for inputs, targets in tqdm(trn_loader(0)):
+
+    #         inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
+    #         targets = targets.cuda() #정답 데이터
+
+    #         # 변화도(Gradient) 매개변수를 0
+    #         optimizer.zero_grad()
+    #         logits = model(inputs.float()) # 결과값
+
+    #         # 순전파 + 역전파 + 최적화
+    #         loss = loss_fn(logits,  targets.float())
+    #         loss.backward()
+    #         optimizer.step()
+
+    #         train_loss.append(loss.item())
+
+    #     model.eval()
+    #     with torch.no_grad():
+    #         for inputs, targets in tqdm(vld_loader(ep)):
+    #             inputs = inputs.cuda()
+    #             targets = targets.cuda()
+
+    #             logits = model(inputs.float())
+
+    #             loss = loss_fn(logits, targets.float())
+
+
+    #             val_loss.append(loss.item())
+
+    #             # 정답 비교 code
+    #             pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
+    #             F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
+    #             final_score.append(F1_score)
+
+    #     Val_loss_ = np.mean(val_loss)
+    #     Train_loss_ = np.mean(train_loss)
+    #     Final_score_ = np.mean(final_score)
+    #     print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
+    #     scheduler.step()
+    #     lrs.append(optimizer.param_groups[0]['lr'])
+    #     print("lr: ", optimizer.param_groups[0]['lr'])
+
+    #     if Final_score_ > best_score and early_stop > Val_loss_:
+    #         best_score = Final_score_
+    #         early_stop = Val_loss_
+    #         early_count = 0
+    #         state_dict = model.cpu().state_dict()
+    #         model = model.cuda()
+    #         best_ep = ep
+    #         best_model = f'{title}_{best_ep}ep'
+    #         torch.save(state_dict, f"../model/{best_model}.pt")
+
+    #         print('\n SAVE MODEL UPDATE \n\n')
+    #     elif early_stop < Val_loss_ or Final_score_ < best_score:
+    #         early_count += 1
+
+    #     if early_count == 4:
+    #         print('early stop!!!')
+    #         break
+
     # optimizer.swap_swa_sgd()
 
-    # https://arxiv.org/abs/2106.10270  모델 선택 참고 논문 
-    # 레귤라이제이션 의 비효율 
+    # https://arxiv.org/abs/2106.10270  모델 선택 참고 논문
+    # 레귤라이제이션 의 비효율
     # 데이터의 양이 많은 것이 학습된 모델이 더 효과적임
-
-    # model.load_state_dict(torch.load('./TW_ViT_model.pt'))
-
+    # # Model load
+    model.load_state_dict(torch.load(f"../model/{title}_30ep.pt"))
+    print("model load!!")
 
     # # Inference
-
-    def test_dataset(num, is_test= False):
-        test_dataset = HPA_Dataset(csv = num,
-                                    img_height = HEIGHT,
-                                    img_width = WIDTH,
-                                    transform = vaild_aug,
-                                    is_test = is_test,
-                                )
-        return test_dataset
-
-
-    def test_loader(num, is_test= False):
-        test_loader = DataLoader(test_dataset(num, is_test),
-                            batch_size = 32,
-                            )
-        return test_loader
-
-
     submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
 
-
     pred = []
-    for inputs, labels in tqdm(test_loader(submit, is_test = True)):
+    for inputs, labels in tqdm(test_loader(submit, is_test= True)):
         model.eval()
         with torch.no_grad():
-            inputs = inputs.cuda()    
+            inputs = inputs.cuda()
             logits = model(inputs.float())
-            
             pred.append(sigmoid_np(logits.cpu().detach().numpy()))
 
-
-    def save_pred(pred, th=0.5, fname= title):
-        pred_list = []
-        for line in tqdm(pred):
-            for idx in line:
-                s = ' '.join(list([str(i) for i in np.nonzero(idx >th)[0]]))
-                pred_list.append(s)
-        submit['Predicted'] = pred_list
-        submit.to_csv(f'../outputs/{fname}',  index=False)
-        
-    save_pred(pred,Thresholds)
-
-
+    save_pred(pred,Thresholds, f'../outputs/{title}_30ep.csv')
 # end
 
