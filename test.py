@@ -62,8 +62,8 @@ name_label_dict = {
 # config
 
 index = 0
-HEIGHT = 512
-WIDTH = 512
+HEIGHT = 256
+WIDTH = 256
 
 data_dir = "../inputs/human-protein-atlas-image-classification/"
 
@@ -136,57 +136,64 @@ class HPA_Dataset(Dataset):
 
   def __getitem__(self, index):
     img_id = self.img_ids[index]
-    img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
-    img_green_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_green.png')
-    img_blue_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_blue.png')
-    # img_yellow_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_yellow.png')
+
+    if self.is_test == 'test':
+        img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
+        img_green_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_green.png')
+        img_blue_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_blue.png')
+        img_yellow_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_yellow.png')
     
-    img = np.stack([
-    np.array(img_red_ch),
-    np.array(img_green_ch),
-    np.array(img_blue_ch),], -1)
-    # np.array(img_yellow_ch),], -1)
-    
-#     img = cv2.resize(img, (self.img_height,  self.img_width)).astype(np.uint8)/255
-#     img = torch.Tensor(img).permute(2,0,1).numpy()
+        img = np.stack([
+        np.array(img_red_ch),
+        np.array(img_green_ch),
+        np.array(img_blue_ch),
+        np.array(img_yellow_ch),], -1)
+        label = self.csv.iloc[:,3:-2].iloc[index]
+    #     img = cv2.resize(img, (self.img_height,  self.img_width)).astype(np.uint8)/255
+    #     img = torch.Tensor(img).permute(2,0,1).numpy()
+    else:
+        img_pkl = pd.read_pickle(f'{data_dir}/pickle/{img_id}.pkl')
+        img = img_pkl[0]
+        label = img_pkl[1]
+
     
     if self.transform is not None:
       img = self.transform(image = img)['image']
-    
-
-    label = self.csv.iloc[:,3:-2].iloc[index]
 
     return img.float(), np.array(label)
 
-
+crop_size= 224
 # # Define augmentations
 train_aug = A.Compose([
-    # A.RandomCrop(HEIGHT, WIDTH, p=1),
-    A.CenterCrop(HEIGHT, WIDTH),
+    # A.Resize(crop_size, crop_size),
+    A.RandomCrop(crop_size, crop_size, p=1),
+    # A.CenterCrop(crop_size, crop_size, p=1),
     A.OneOf([
-      A.HorizontalFlip(p=0.3),
-      A.RandomRotate90(p=0.3),
-      A.VerticalFlip(p=0.3)            
+      A.HorizontalFlip(p=0.33),
+      A.RandomRotate90(p=0.33),
+      A.VerticalFlip(p=0.33)            
     ], p=0.4),
     A.OneOf([
-      A.MotionBlur(p=0.3),
-      A.OpticalDistortion(p=0.3),
-      A.GaussNoise(p=0.3)                 
+      A.MotionBlur(p=0.33),
+      A.OpticalDistortion(p=0.33),
+      A.GaussNoise(p=0.33)               
     ], p=0.4),
+    A.augmentations.dropout.cutout.Cutout(p= 0.25),
     # 이미지 채널별 mean, std 값 계산
     # A.Normalize([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814]),
-    A.Normalize([0.08069, 0.05258, 0.05487], [0.13704, 0.10145, 0.15313]),
-    A.pytorch.transforms.ToTensorV2()
+    # A.Normalize([0.08069, 0.05258, 0.05487], [0.13704, 0.10145, 0.15313]),
+    ToTensorV2(),
 ])
 
 vaild_aug = A.Compose([
-    A.CenterCrop(HEIGHT,WIDTH),
-    A.Normalize([0.08069, 0.05258, 0.05487], [0.13704, 0.10145, 0.15313]),
-    A.pytorch.transforms.ToTensorV2()
+    # A.Resize(crop_size, crop_size),
+    A.CenterCrop(crop_size,crop_size),
+    # A.Normalize([0.08069, 0.05258, 0.05487], [0.13704, 0.10145, 0.15313]),
+   ToTensorV2(),
 ])
 
 num  = 0 
-batch_size= 8
+batch_size= 32
 def trn_dataset(num, is_test= False):
     trn_dataset = HPA_Dataset(csv =  df_train.iloc[trn_idx],
                                  img_height = HEIGHT,
@@ -247,10 +254,10 @@ class Densenet121(nn.Module):
         super().__init__()
         self.model = timm.create_model('densenet121', pretrained=True, num_classes=class_n, in_chans= in_chans,)
         
-        self.model.global_pool = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.AdaptiveMaxPool2d(output_size=(1, 1)))
-#         w = self.model.conv1.weight
-#         self.model.conv1 = nn.Conv2d(4, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-#         self.model.conv1.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(64,1,7,7)),dim=1))
+        # self.model.global_pool = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.AdaptiveMaxPool2d(output_size=(1, 1)))
+        w = self.model.features.conv0.weight
+        self.model.features.conv0 = nn.Conv2d(4, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        self.model.features.conv0.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(64,1,7,7)),dim=1))
         
         
 #         self.model.fc = nn.Sequential(nn.Dropout(0.5), nn.Linear(in_features= 1024, out_features= 28, bias = True))
@@ -400,18 +407,18 @@ if __name__ ==  "__main__" :
     model = model.cuda()
     loss_fn = FocalLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-06)
-    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=3.0E-03,  T_up=0, gamma=0.5)
+    optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-08)
+    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=3.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
     gc.collect()
 
-    scheduler_start_ep= 10
+    scheduler_start_ep= 30
     best_score = -1
     final_score = []
     early_stop = np.inf
     lrs = []
     epoch = 50
-    title= "DN_3ch_Adam_"
+    title= "DN_4ch_Cut_"
 
     for ep in range(epoch):
         train_loss = []
@@ -464,7 +471,7 @@ if __name__ ==  "__main__" :
         lrs.append(optimizer.param_groups[0]['lr'])
         print("lr: ", optimizer.param_groups[0]['lr'])
 
-        if Final_score_ > best_score and early_stop > Val_loss_:
+        if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
             best_score = Final_score_
             early_stop = Val_loss_
             early_count = 0
@@ -475,7 +482,7 @@ if __name__ ==  "__main__" :
             torch.save(state_dict, f"../model/{best_model}.pt")
 
             print('\n SAVE MODEL UPDATE \n\n')
-        elif early_stop < Val_loss_ or Final_score_ < best_score:
+        elif (early_stop < Val_loss_) or (Final_score_ < best_score):
             early_count += 1
 
         if ep == scheduler_start_ep:
@@ -494,7 +501,7 @@ if __name__ ==  "__main__" :
     # 데이터의 양이 많은 것이 학습된 모델이 더 효과적임
     # # Model load
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
-    print("model load!!")
+    print(f"{best_model}_model load!!")
 
     # # Inference
     submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
@@ -508,5 +515,6 @@ if __name__ ==  "__main__" :
             pred.append(sigmoid_np(logits.cpu().detach().numpy()))
 
     save_pred(pred,Thresholds, best_model)
+    pd.DataFrame(lrs).plot()
 # end
 
