@@ -408,11 +408,11 @@ if __name__ ==  "__main__" :
     loss_fn = FocalLoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-08)
-    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=3.0E-04,  T_up=0, gamma=0.1)
+    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=1.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
     gc.collect()
 
-    scheduler_start_ep= 30
+    scheduler_start_ep= 15
     best_score = -1
     final_score = []
     early_stop = np.inf
@@ -515,6 +515,6 @@ if __name__ ==  "__main__" :
             pred.append(sigmoid_np(logits.cpu().detach().numpy()))
 
     save_pred(pred,Thresholds, best_model)
-    pd.DataFrame(lrs).plot()
+    # pd.DataFrame(lrs).plot()
 # end
 
