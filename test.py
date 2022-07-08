@@ -138,17 +138,20 @@ class HPA_Dataset(Dataset):
     img_id = self.img_ids[index]
 
     if self.is_test == 'test':
-        img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
-        img_green_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_green.png')
-        img_blue_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_blue.png')
-        img_yellow_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_yellow.png')
+        # img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
+        # img_green_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_green.png')
+        # img_blue_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_blue.png')
+        # img_yellow_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_yellow.png')
     
-        img = np.stack([
-        np.array(img_red_ch),
-        np.array(img_green_ch),
-        np.array(img_blue_ch),
-        np.array(img_yellow_ch),], -1)
-        label = self.csv.iloc[:,3:-2].iloc[index]
+        # img = np.stack([
+        # np.array(img_red_ch),
+        # np.array(img_green_ch),
+        # np.array(img_blue_ch),
+        # np.array(img_yellow_ch),], -1)
+        # label = self.csv.iloc[:,3:-2].iloc[index]
+        img_pkl = pd.read_pickle(f'{data_dir}/pickle/{img_id}.pkl')
+        img = img_pkl[0]
+        label = img_pkl[1]        
     #     img = cv2.resize(img, (self.img_height,  self.img_width)).astype(np.uint8)/255
     #     img = torch.Tensor(img).permute(2,0,1).numpy()
     else:
@@ -232,7 +235,7 @@ def test_dataset(num, is_test= False):
     test_dataset = HPA_Dataset(csv = num,
                                img_height = HEIGHT,
                                img_width = WIDTH,
-                               transform = vaild_aug,
+                               transform = train_aug,
                                is_test = is_test,
                                )
     return test_dataset
@@ -240,7 +243,7 @@ def test_dataset(num, is_test= False):
 def test_loader(num, is_test= False):
     test_loader = DataLoader(test_dataset(num, is_test),
                             #  num_workers= 2,
-                             batch_size = batch_size,
+                             batch_size = 2,
                              )
     return test_loader
 # # Create model, opt, criterion
@@ -417,82 +420,82 @@ if __name__ ==  "__main__" :
     final_score = []
     early_stop = np.inf
     lrs = []
-    epoch = 50
-    title= "DN_4ch_Cut_"
+    epoch = 1
+    title= "DN_4ch_Random_"
 
-    for ep in range(epoch):
-        train_loss = []
-        val_loss = []
-        val_true = []
-        val_pred = []
+    # for ep in range(epoch):
+    #     train_loss = []
+    #     val_loss = []
+    #     val_true = []
+    #     val_pred = []
 
-        print(f'======================== {ep} Epoch train start ========================')
-        model.train()
-        for inputs, targets in tqdm(trn_loader(0)):
+    #     print(f'======================== {ep} Epoch train start ========================')
+    #     model.train()
+    #     for inputs, targets in tqdm(trn_loader(0)):
 
-            inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
-            targets = targets.cuda() #정답 데이터
+    #         inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
+    #         targets = targets.cuda() #정답 데이터
 
-            # 변화도(Gradient) 매개변수를 0
-            optimizer.zero_grad()
-            logits = model(inputs.float()) # 결과값
+    #         # 변화도(Gradient) 매개변수를 0
+    #         optimizer.zero_grad()
+    #         logits = model(inputs.float()) # 결과값
 
-            # 순전파 + 역전파 + 최적화
-            loss = loss_fn(logits,  targets.float())
-            loss.backward()
-            optimizer.step()
+    #         # 순전파 + 역전파 + 최적화
+    #         loss = loss_fn(logits,  targets.float())
+    #         loss.backward()
+    #         optimizer.step()
 
-            train_loss.append(loss.item())
+    #         train_loss.append(loss.item())
 
-        model.eval()
-        with torch.no_grad():
-            for inputs, targets in tqdm(vld_loader(ep)):
-                inputs = inputs.cuda()
-                targets = targets.cuda()
+    #     model.eval()
+    #     with torch.no_grad():
+    #         for inputs, targets in tqdm(vld_loader(ep)):
+    #             inputs = inputs.cuda()
+    #             targets = targets.cuda()
 
-                logits = model(inputs.float())
+    #             logits = model(inputs.float())
 
-                loss = loss_fn(logits, targets.float())
+    #             loss = loss_fn(logits, targets.float())
 
 
-                val_loss.append(loss.item())
+    #             val_loss.append(loss.item())
 
-                # 정답 비교 code
-                pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-                F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
-                final_score.append(F1_score)
+    #             # 정답 비교 code
+    #             pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
+    #             F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
+    #             final_score.append(F1_score)
 
-        Val_loss_ = np.mean(val_loss)
-        Train_loss_ = np.mean(train_loss)
-        Final_score_ = np.mean(final_score)
-        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
-        if ep >= scheduler_start_ep:
-            scheduler.step()
-        lrs.append(optimizer.param_groups[0]['lr'])
-        print("lr: ", optimizer.param_groups[0]['lr'])
+    #     Val_loss_ = np.mean(val_loss)
+    #     Train_loss_ = np.mean(train_loss)
+    #     Final_score_ = np.mean(final_score)
+    #     print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
+    #     if ep >= scheduler_start_ep:
+    #         scheduler.step()
+    #     lrs.append(optimizer.param_groups[0]['lr'])
+    #     print("lr: ", optimizer.param_groups[0]['lr'])
 
-        if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
-            best_score = Final_score_
-            early_stop = Val_loss_
-            early_count = 0
-            state_dict = model.cpu().state_dict()
-            model = model.cuda()
-            best_ep = ep
-            best_model = f'{title}_{best_ep}ep'
-            torch.save(state_dict, f"../model/{best_model}.pt")
+    #     if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
+    #         best_score = Final_score_
+    #         early_stop = Val_loss_
+    #         early_count = 0
+    #         state_dict = model.cpu().state_dict()
+    #         model = model.cuda()
+    #         best_ep = ep
+    #         best_model = f'{title}_{best_ep}ep'
+    #         torch.save(state_dict, f"../model/{best_model}.pt")
 
-            print('\n SAVE MODEL UPDATE \n\n')
-        elif (early_stop < Val_loss_) or (Final_score_ < best_score):
-            early_count += 1
+    #         print('\n SAVE MODEL UPDATE \n\n')
+    #     elif (early_stop < Val_loss_) or (Final_score_ < best_score):
+    #         early_count += 1
 
-        if ep == scheduler_start_ep:
-            early_count= 0
-            best_score= -1
-            early_stop= np.inf
-        if ep > scheduler_start_ep:
-            if early_count == 10:
-                print('early stop!!!')
-                break
+    #     if ep == scheduler_start_ep:
+    #         early_count= 0
+    #         best_score= -1
+    #         early_stop= np.inf
+    #     if ep > scheduler_start_ep:
+    #         if early_count == 10:
+    #             print('early stop!!!')
+    #             break
 
     # optimizer.swap_swa_sgd()
 
@@ -500,21 +503,47 @@ if __name__ ==  "__main__" :
     # 레귤라이제이션 의 비효율
     # 데이터의 양이 많은 것이 학습된 모델이 더 효과적임
     # # Model load
+    best_model= 'DN_4ch_Cut__31ep'
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
     print(f"{best_model}_model load!!")
 
     # # Inference
     submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
 
-    pred = []
-    for inputs, labels in tqdm(test_loader(submit, is_test= True)):
-        model.eval()
-        with torch.no_grad():
-            inputs = inputs.cuda()
-            logits = model(inputs.float())
-            pred.append(sigmoid_np(logits.cpu().detach().numpy()))
+    # pred = []
+    # for inputs, labels in tqdm(test_loader(submit, is_test= True)):
+    #     model.eval()
+    #     with torch.no_grad():
+    #         inputs = inputs.cuda()
+    #         logits = model(inputs.float())
+    #         pred.append(sigmoid_np(logits.cpu().detach().numpy()))
 
-    save_pred(pred,Thresholds, best_model)
-    # pd.DataFrame(lrs).plot()
+    # save_pred(pred,Thresholds, best_model)
+
+    for TTA in [3,8,16,32]:
+        stack_pred = []
+        for _ in range(TTA):
+            pred = []
+            for inputs, labels in tqdm(test_loader(submit, is_test= True)):
+                model.eval()
+                with torch.no_grad():
+                    inputs = inputs.cuda()
+                    logits = model(inputs.float())
+                    logits = logits.cpu().detach().numpy()
+                    pred.append(logits)
+            pred = np.array(pred)
+            print(pred.shape)
+            stack_pred.append(pred)
+        stack_pred = np.array(stack_pred)    
+        print(stack_pred.shape)
+        result = np.stack((stack_pred), axis= -1)
+        print(result.shape)
+        result_max = result.max(axis= -1)
+        result_mean = result.mean(axis= -1)
+
+        save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTAmax{TTA}')
+        save_pred(sigmoid_np(result_mean) ,Thresholds, best_model + f'_TTAmean{TTA}')
+
+
 # end
 
