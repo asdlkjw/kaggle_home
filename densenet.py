@@ -165,7 +165,7 @@ class HPA_Dataset(Dataset):
 
     return img.float(), np.array(label)
 
-crop_size= 240
+crop_size= 300
 # # Define augmentations
 train_aug = A.Compose([
     # A.Resize(crop_size, crop_size),
@@ -181,7 +181,7 @@ train_aug = A.Compose([
       A.OpticalDistortion(p=0.33),
       A.GaussNoise(p=0.33)               
     ], p=0.4),
-    A.augmentations.dropout.cutout.Cutout(p= 0.25),
+    A.augmentations.dropout.cutout.Cutout(p= 0.33),
     # 이미지 채널별 mean, std 값 계산
     # A.Normalize([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814]),
     # A.Normalize([0.08069, 0.05258, 0.05487], [0.13704, 0.10145, 0.15313]),
@@ -212,7 +212,7 @@ TTA_aug = A.Compose([
     ToTensorV2(),
 ])
 num  = 0 
-batch_size= 32
+batch_size= 16
 def trn_dataset(num, is_test= False):
     trn_dataset = HPA_Dataset(csv =  df_train.iloc[trn_idx],
                                  img_height = HEIGHT,
@@ -268,25 +268,22 @@ import timm
 # # Model list
 
 # https://github.com/lucidrains/vit-pytorch
-
-class Effic(nn.Module):
+class Densenet121(nn.Module):
     def __init__(self,in_chans = 3, class_n=28):
         super().__init__()
-        self.model = timm.create_model('tf_efficientnetv2_b1', pretrained=True, num_classes=class_n, in_chans= in_chans,)
+        self.model = timm.create_model('densenet121', pretrained=True, num_classes=class_n, in_chans= in_chans,)
         
         # self.model.global_pool = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.AdaptiveMaxPool2d(output_size=(1, 1)))
-        w = self.model.conv_stem.weight
-        self.model.conv_stem = nn.Conv2d(4, 32, kernel_size=(3, 3), stride=(2, 2), bias=False)
-        self.model.conv_stem.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(32,1,3,3)),dim=1))
+        w = self.model.features.conv0.weight
+        self.model.features.conv0 = nn.Conv2d(4, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        self.model.features.conv0.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(64,1,7,7)),dim=1))
         
         
 #         self.model.fc = nn.Sequential(nn.Dropout(0.5), nn.Linear(in_features= 1024, out_features= 28, bias = True))
         self.model.classifier = nn.Sequential(
-                                        nn.BatchNorm1d(1280, eps=1e-05, momentum= 0.1, affine= True, track_running_stats=True),
-                                        nn.ReLU(),
-                                        nn.Dropout(0,5),
-                                        nn.Linear(in_features= 1280, out_features= 28, bias= True),
-                                        )
+                        nn.BatchNorm1d(1024, eps=1e-05, momentum= 0.1, affine= True, track_running_stats=True),
+                        nn.ReLU(),nn.Dropout(0.5),nn.Linear(in_features= 1024, out_features= 28, bias= True),
+                        )
 
     def forward(self, x):
 
@@ -427,12 +424,12 @@ if __name__ ==  "__main__" :
     # lr_finder.reset() # to reset the model and optimizer to their initial state
 
     Thresholds = 0.4
-    model = Effic()
+    model = Densenet121()
     model = model.cuda()
     loss_fn = FocalLoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-08)
-    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=5.0E-05,  T_up=0, gamma=0.1)
+    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=3.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -442,82 +439,82 @@ if __name__ ==  "__main__" :
     early_stop = np.inf
     lrs = []
     epoch = 80
-    title= "Ef_b1_TTA_"
+    title= "DN_300px_TTA_"
 
-    # for ep in range(epoch):
-    #     train_loss = []
-    #     val_loss = []
-    #     val_true = []
-    #     val_pred = []
+    for ep in range(epoch):
+        train_loss = []
+        val_loss = []
+        val_true = []
+        val_pred = []
 
-    #     print(f'======================== {ep} Epoch train start ========================')
-    #     model.train()
-    #     for inputs, targets in tqdm(trn_loader(0)):
+        print(f'======================== {ep} Epoch train start ========================')
+        model.train()
+        for inputs, targets in tqdm(trn_loader(0)):
 
-    #         inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
-    #         targets = targets.cuda() #정답 데이터
+            inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
+            targets = targets.cuda() #정답 데이터
 
-    #         # 변화도(Gradient) 매개변수를 0
-    #         optimizer.zero_grad()
-    #         logits = model(inputs.float()) # 결과값
+            # 변화도(Gradient) 매개변수를 0
+            optimizer.zero_grad()
+            logits = model(inputs.float()) # 결과값
 
-    #         # 순전파 + 역전파 + 최적화
-    #         loss = loss_fn(logits,  targets.float())
-    #         loss.backward()
-    #         optimizer.step()
+            # 순전파 + 역전파 + 최적화
+            loss = loss_fn(logits,  targets.float())
+            loss.backward()
+            optimizer.step()
 
-    #         train_loss.append(loss.item())
+            train_loss.append(loss.item())
 
-    #     model.eval()
-    #     with torch.no_grad():
-    #         for inputs, targets in tqdm(vld_loader(ep)):
-    #             inputs = inputs.cuda()
-    #             targets = targets.cuda()
+        model.eval()
+        with torch.no_grad():
+            for inputs, targets in tqdm(vld_loader(ep)):
+                inputs = inputs.cuda()
+                targets = targets.cuda()
 
-    #             logits = model(inputs.float())
+                logits = model(inputs.float())
 
-    #             loss = loss_fn(logits, targets.float())
+                loss = loss_fn(logits, targets.float())
 
 
-    #             val_loss.append(loss.item())
+                val_loss.append(loss.item())
 
-    #             # 정답 비교 code
-    #             pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-    #             F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
-    #             final_score.append(F1_score)
+                # 정답 비교 code
+                pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
+                F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
+                final_score.append(F1_score)
 
-    #     Val_loss_ = np.mean(val_loss)
-    #     Train_loss_ = np.mean(train_loss)
-    #     Final_score_ = np.mean(final_score)
-    #     print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
-    #     if ep >= scheduler_start_ep:
-    #         scheduler.step()
-    #     lrs.append(optimizer.param_groups[0]['lr'])
-    #     print("lr: ", optimizer.param_groups[0]['lr'])
+        Val_loss_ = np.mean(val_loss)
+        Train_loss_ = np.mean(train_loss)
+        Final_score_ = np.mean(final_score)
+        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
+        if ep >= scheduler_start_ep:
+            scheduler.step()
+        lrs.append(optimizer.param_groups[0]['lr'])
+        print("lr: ", optimizer.param_groups[0]['lr'])
 
-    #     if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
-    #         best_score = Final_score_
-    #         early_stop = Val_loss_
-    #         early_count = 0
-    #         state_dict = model.cpu().state_dict()
-    #         model = model.cuda()
-    #         best_ep = ep
-    #         best_model = f'{title}_{best_ep}ep'
-    #         torch.save(state_dict, f"../model/{best_model}.pt")
+        if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
+            best_score = Final_score_
+            early_stop = Val_loss_
+            early_count = 0
+            state_dict = model.cpu().state_dict()
+            model = model.cuda()
+            best_ep = ep
+            best_model = f'{title}_{best_ep}ep'
+            torch.save(state_dict, f"../model/{best_model}.pt")
 
-    #         print('\n SAVE MODEL UPDATE \n\n')
-    #     elif (early_stop < Val_loss_) or (Final_score_ < best_score):
-    #         early_count += 1
+            print('\n SAVE MODEL UPDATE \n\n')
+        elif (early_stop < Val_loss_) or (Final_score_ < best_score):
+            early_count += 1
 
-    #     if ep == scheduler_start_ep:
-    #         early_count= 0
-    #         best_score= -1
-    #         early_stop= np.inf
-    #     if ep > scheduler_start_ep:
-    #         if early_count == 20:
-    #             print('early stop!!!')
-    #             torch.save(state_dict, f"../model/{best_model}_last.pt")
-    #             break
+        if ep == scheduler_start_ep:
+            early_count= 0
+            best_score= -1
+            early_stop= np.inf
+        if ep > scheduler_start_ep:
+            if early_count == 20:
+                print('early stop!!!')
+                torch.save(state_dict, f"../model/{best_model}_last.pt")
+                break
 
     # optimizer.swap_swa_sgd()
 
@@ -525,7 +522,7 @@ if __name__ ==  "__main__" :
     # 레귤라이제이션 의 비효율
     # 데이터의 양이 많은 것이 학습된 모델이 더 효과적임
     # # Model load
-    best_model= 'Ef_b1_TTA__34ep_last'
+    # best_model= 'DN_4ch_TTA__48ep'
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
     print(f"{best_model}_model load!!")
 
@@ -555,12 +552,12 @@ if __name__ ==  "__main__" :
         pred = np.array(pred)
         stack_pred.append(pred)
 
-        if TTA in (8,12,16):
-            stack_pred_2 = np.array(stack_pred)    
-            result = np.stack((stack_pred_2), axis= -1)
-            result_max = result.max(axis= -1)
-            # result_mean = result.mean(axis= -1)
+        # if TTA in range(1,17):
+        stack_pred_2 = np.array(stack_pred)    
+        result = np.stack((stack_pred_2), axis= -1)
+        result_max = result.max(axis= -1)
+        # result_mean = result.mean(axis= -1)
 
-            save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTAmax{TTA}')
+        save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTAmax{TTA}')
 # end
 
