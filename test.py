@@ -62,8 +62,8 @@ name_label_dict = {
 # config
 
 index = 0
-HEIGHT = 256
-WIDTH = 256
+HEIGHT = 512
+WIDTH = 512
 
 data_dir = "../inputs/human-protein-atlas-image-classification/"
 
@@ -165,11 +165,11 @@ class HPA_Dataset(Dataset):
 
     return img.float(), np.array(label)
 
-crop_size= 240
+crop_size= 300
 # # Define augmentations
 train_aug = A.Compose([
-    # A.Resize(crop_size, crop_size),
-    A.RandomCrop(crop_size, crop_size, p=1),
+    A.Resize(crop_size, crop_size),
+    # A.RandomCrop(crop_size, crop_size, p=1),
     # A.CenterCrop(crop_size, crop_size, p=1),
     A.OneOf([
       A.HorizontalFlip(p=0.33),
@@ -189,15 +189,15 @@ train_aug = A.Compose([
 ])
 
 vaild_aug = A.Compose([
-    # A.Resize(crop_size, crop_size),
-    A.CenterCrop(crop_size,crop_size),
+    A.Resize(crop_size, crop_size),
+    # A.CenterCrop(crop_size,crop_size),
     # A.Normalize([0.08069, 0.05258, 0.05487], [0.13704, 0.10145, 0.15313]),
    ToTensorV2(),
 ])
 
 TTA_aug = A.Compose([
-    # A.Resize(crop_size, crop_size),
-    A.RandomCrop(crop_size, crop_size, p=1),
+    A.Resize(crop_size, crop_size),
+    # A.RandomCrop(crop_size, crop_size, p=1),
     # A.CenterCrop(crop_size, crop_size, p=1),
     A.OneOf([
       A.HorizontalFlip(p=0.33),
@@ -262,6 +262,54 @@ def test_loader(num, is_test= False):
                              batch_size = 2,
                              )
     return test_loader
+
+# ArcFaceloss
+# class ArcMarginProduct(nn.Module):
+#     r"""Implement of large margin arc distance: :
+#         Args:
+#             in_features: size of each input sample
+#             out_features: size of each output sample
+#             s: norm of input feature
+#             m: margin
+#             cos(theta + m)
+#         """
+#     def __init__(self, s=30.0, 
+#                  m=0.50, easy_margin=False, ls_eps=0.0, target_size= 28):
+#         super(ArcMarginProduct, self).__init__()
+#         self.s = s
+#         self.m = m
+#         self.ls_eps = ls_eps  # label smoothing
+#         self.target_size = target_size
+#         # nn.init.xavier_uniform_(self.weight)
+
+#         self.easy_margin = easy_margin
+#         self.cos_m = math.cos(m)
+#         self.sin_m = math.sin(m)
+#         self.th = math.cos(math.pi - m)
+#         self.mm = math.sin(math.pi - m) * m
+
+#     def forward(self, input, target):
+#         # --------------------------- cos(theta) & phi(theta) ---------------------
+#         # cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+#         if not (target.size() == input.size()):
+#             raise ValueError("Target size ({}) must be the same as input size ({})"
+#                              .format(target.size(), input.size()))
+#         cosine = input      
+#         sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
+#         phi = cosine * self.cos_m - sine * self.sin_m
+#         if self.easy_margin:
+#             phi = torch.where(cosine > 0, phi, cosine)
+#         else:
+#             phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+#         if self.ls_eps > 0:
+#             target = (1 - self.ls_eps) * target + self.ls_eps / self.target_size
+#         # -------------torch.where(out_i = {x_i if condition_i else y_i) ------------
+#         output = (target * phi) + ((1.0 - target) * cosine)
+#         output *= self.s
+
+#         return output
+
+
 # # Create model, opt, criterion
 import timm
 
@@ -272,24 +320,23 @@ import timm
 class Effic(nn.Module):
     def __init__(self,in_chans = 3, class_n=28):
         super().__init__()
-        self.model = timm.create_model('tf_efficientnetv2_b1', pretrained=True, num_classes=class_n, in_chans= in_chans,)
+        self.model = timm.create_model('tf_efficientnetv2_b3', pretrained=True, num_classes=class_n, in_chans= in_chans,)
         
         # self.model.global_pool = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.AdaptiveMaxPool2d(output_size=(1, 1)))
         w = self.model.conv_stem.weight
-        self.model.conv_stem = nn.Conv2d(4, 32, kernel_size=(3, 3), stride=(2, 2), bias=False)
-        self.model.conv_stem.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(32,1,3,3)),dim=1))
+        self.model.conv_stem = nn.Conv2d(4, 40, kernel_size=(3, 3), stride=(2, 2), bias=False)
+        self.model.conv_stem.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(40,1,3,3)),dim=1))
         
         
 #         self.model.fc = nn.Sequential(nn.Dropout(0.5), nn.Linear(in_features= 1024, out_features= 28, bias = True))
         self.model.classifier = nn.Sequential(
-                                        nn.BatchNorm1d(1280, eps=1e-05, momentum= 0.1, affine= True, track_running_stats=True),
+                                        nn.BatchNorm1d(1536, eps=1e-05, momentum= 0.1, affine= True, track_running_stats=True),
                                         nn.ReLU(),
                                         nn.Dropout(0,5),
-                                        nn.Linear(in_features= 1280, out_features= 28, bias= True),
-                                        )
-
+                                        nn.Linear(in_features= 1536, out_features= 28, bias= True),
+                                        ) 
+# self.model.fc = ArcMarginProduct(in_features= 768, out_features= 28, s= 30, m= 0.5, easy_margin=0.0, ls_eps=0.0)
     def forward(self, x):
-
         x = self.model(x)
         return x
 # ===========================================================================================
@@ -436,88 +483,87 @@ if __name__ ==  "__main__" :
     torch.cuda.empty_cache()
     gc.collect()
 
-    scheduler_start_ep= 30
     best_score = -1
     final_score = []
     early_stop = np.inf
+    early_step = 0
     lrs = []
     epoch = 80
-    title= "Ef_b1_TTA_"
+    title= "Efv2_TTA_"
 
-    # for ep in range(epoch):
-    #     train_loss = []
-    #     val_loss = []
-    #     val_true = []
-    #     val_pred = []
+    for ep in range(epoch):
+        train_loss = []
+        val_loss = []
+        val_true = []
+        val_pred = []
 
-    #     print(f'======================== {ep} Epoch train start ========================')
-    #     model.train()
-    #     for inputs, targets in tqdm(trn_loader(0)):
+        print(f'======================== {ep} Epoch train start ========================')
+        model.train()
+        for inputs, targets in tqdm(trn_loader(0)):
 
-    #         inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
-    #         targets = targets.cuda() #정답 데이터
+            inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
+            targets = targets.cuda() #정답 데이터
 
-    #         # 변화도(Gradient) 매개변수를 0
-    #         optimizer.zero_grad()
-    #         logits = model(inputs.float()) # 결과값
+            # 변화도(Gradient) 매개변수를 0
+            optimizer.zero_grad()
+            logits = model(inputs.float()) # 결과값
 
-    #         # 순전파 + 역전파 + 최적화
-    #         loss = loss_fn(logits,  targets.float())
-    #         loss.backward()
-    #         optimizer.step()
+            # 순전파 + 역전파 + 최적화
+            loss = loss_fn(logits,  targets.float())
+            loss.backward()
+            optimizer.step()
 
-    #         train_loss.append(loss.item())
+            train_loss.append(loss.item())
 
-    #     model.eval()
-    #     with torch.no_grad():
-    #         for inputs, targets in tqdm(vld_loader(ep)):
-    #             inputs = inputs.cuda()
-    #             targets = targets.cuda()
+        model.eval()
+        with torch.no_grad():
+            for inputs, targets in tqdm(vld_loader(ep)):
+                inputs = inputs.cuda()
+                targets = targets.cuda()
 
-    #             logits = model(inputs.float())
+                logits = model(inputs.float())
 
-    #             loss = loss_fn(logits, targets.float())
+                loss = loss_fn(logits, targets.float())
 
 
-    #             val_loss.append(loss.item())
+                val_loss.append(loss.item())
 
-    #             # 정답 비교 code
-    #             pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-    #             F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
-    #             final_score.append(F1_score)
+                # 정답 비교 code
+                pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
+                F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
+                final_score.append(F1_score)
 
-    #     Val_loss_ = np.mean(val_loss)
-    #     Train_loss_ = np.mean(train_loss)
-    #     Final_score_ = np.mean(final_score)
-    #     print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
-    #     if ep >= scheduler_start_ep:
-    #         scheduler.step()
-    #     lrs.append(optimizer.param_groups[0]['lr'])
-    #     print("lr: ", optimizer.param_groups[0]['lr'])
+        Val_loss_ = np.mean(val_loss)
+        Train_loss_ = np.mean(train_loss)
+        Final_score_ = np.mean(final_score)
+        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
 
-    #     if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
-    #         best_score = Final_score_
-    #         early_stop = Val_loss_
-    #         early_count = 0
-    #         state_dict = model.cpu().state_dict()
-    #         model = model.cuda()
-    #         best_ep = ep
-    #         best_model = f'{title}_{best_ep}ep'
-    #         torch.save(state_dict, f"../model/{best_model}.pt")
+        if early_step >= 1:
+            scheduler.step()
+        lrs.append(optimizer.param_groups[0]['lr'])
+        print("lr: ", optimizer.param_groups[0]['lr'])
 
-    #         print('\n SAVE MODEL UPDATE \n\n')
-    #     elif (early_stop < Val_loss_) or (Final_score_ < best_score):
-    #         early_count += 1
+        if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
+            best_score = Final_score_
+            early_stop = Val_loss_
+            early_count = 0
+            state_dict = model.cpu().state_dict()
+            model = model.cuda()
+            best_ep = ep
+            best_model = f'{title}_{best_ep}ep'
+            torch.save(state_dict, f"../model/{best_model}.pt")
 
-    #     if ep == scheduler_start_ep:
-    #         early_count= 0
-    #         best_score= -1
-    #         early_stop= np.inf
-    #     if ep > scheduler_start_ep:
-    #         if early_count == 20:
-    #             print('early stop!!!')
-    #             torch.save(state_dict, f"../model/{best_model}_last.pt")
-    #             break
+            print('\n SAVE MODEL UPDATE \n\n')
+        elif (early_stop < Val_loss_):
+            early_count += 1
+
+        if early_count == 5:
+            early_step += 1
+            print('first early stop!!!')
+            torch.save(state_dict, f"../model/{best_model}_last.pt")
+
+        if early_step == 3:
+            break
 
     # optimizer.swap_swa_sgd()
 
@@ -525,7 +571,7 @@ if __name__ ==  "__main__" :
     # 레귤라이제이션 의 비효율
     # 데이터의 양이 많은 것이 학습된 모델이 더 효과적임
     # # Model load
-    best_model= 'Ef_b1_TTA__34ep_last'
+    # best_model= 'Ef_b1_TTA__34ep_last'
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
     print(f"{best_model}_model load!!")
 
