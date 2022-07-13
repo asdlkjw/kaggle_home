@@ -606,12 +606,14 @@ if __name__ ==  "__main__" :
         elif (early_stop < Val_loss_):
             early_count += 1
 
-        if early_count == 5:
+        if early_count // 5 == 1:
             early_step += 1
-            print('first early stop!!!')
+            early_count = 0
+            print('step start!!! ===================================\n')
             torch.save(state_dict, f"../model/{best_model}_last.pt")
 
         if early_step == 3:
+            print('early stop ======================================')
             break
 
     # optimizer.swap_swa_sgd()
