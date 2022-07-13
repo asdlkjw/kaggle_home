@@ -1,3 +1,4 @@
+from cProfile import label
 import pandas as pd
 import numpy as np
 import torch
@@ -62,8 +63,8 @@ name_label_dict = {
 # config
 
 index = 0
-HEIGHT = 256
-WIDTH = 256
+HEIGHT = 512
+WIDTH = 512
 
 data_dir = "../inputs/human-protein-atlas-image-classification/"
 
@@ -93,10 +94,6 @@ train_files = os.listdir(f"{data_dir}/train")
 test_files = os.listdir(f"{data_dir}/test")
 percentage = np.round(len(test_files) / len(train_files) * 100)
 
-print(f"train_data_set 대비 test_data_set이 {percentage} % 비율")
-
-# train  test 비율 38%  참고하여 3:1로 split
-# label의 bias가 높아 MultilabelStratifiedKFold 를 사용하여 균등하게 split
 mskf = MultilabelStratifiedKFold(n_splits= 4, shuffle=True, random_state= 42)
 
 df_train["fold"] = -1
@@ -181,7 +178,7 @@ train_aug = A.Compose([
       A.OpticalDistortion(p=0.33),
       A.GaussNoise(p=0.33)               
     ], p=0.4),
-    A.augmentations.dropout.cutout.Cutout(p= 0.33),
+    A.augmentations.dropout.cutout.Cutout(p= 0.25),
     # 이미지 채널별 mean, std 값 계산
     # A.Normalize([0.08069, 0.05258, 0.05487, 0.08282], [0.13704, 0.10145, 0.15313, 0.13814]),
     # A.Normalize([0.08069, 0.05258, 0.05487], [0.13704, 0.10145, 0.15313]),
@@ -212,7 +209,7 @@ TTA_aug = A.Compose([
     ToTensorV2(),
 ])
 num  = 0 
-batch_size= 16
+batch_size= 64
 def trn_dataset(num, is_test= False):
     trn_dataset = HPA_Dataset(csv =  df_train.iloc[trn_idx],
                                  img_height = HEIGHT,
@@ -262,47 +259,104 @@ def test_loader(num, is_test= False):
                              batch_size = 2,
                              )
     return test_loader
-# # Create model, opt, criterion
+
+# ArcFaceloss
+class ArcMarginProduct(nn.Module):
+    def __init__(self, in_features, out_features, s=30.0, 
+                 m=0.50, easy_margin=False, ls_eps=0.0):
+        super(ArcMarginProduct, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.s = s
+        self.m = m
+        self.ls_eps = ls_eps  # label smoothing
+        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features))
+        nn.init.xavier_uniform_(self.weight)
+
+        self.easy_margin = easy_margin
+        self.cos_m = math.cos(m)
+        self.sin_m = math.sin(m)
+        self.th = math.cos(math.pi - m)
+        self.mm = math.sin(math.pi - m) * m
+
+    def forward(self, input, label= None):
+        # --------------------------- cos(theta) & phi(theta) ---------------------
+        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+        if label == None:
+            return cosine
+        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
+        phi = cosine * self.cos_m - sine * self.sin_m
+        if self.easy_margin:
+            phi = torch.where(cosine > 0, phi, cosine)
+        else:
+            phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+        # --------------------------- convert label to one-hot ---------------------
+        # one_hot = torch.zeros(cosine.size(), requires_grad=True, device='cuda')
+        # one_hot = torch.zeros(cosine.size(), device="cuda:0")
+        # one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+        one_hot = label
+        if self.ls_eps > 0:
+            one_hot = (1 - self.ls_eps) * one_hot + self.ls_eps / self.out_features
+        # -------------torch.where(out_i = {x_i if condition_i else y_i) ------------
+        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
+        output *= self.s
+
+        return output
+
 import timm
 
-# # Model list
+class AdaptiveConcatPool2d(nn.Module):
+    "Layer that concats `AdaptiveAvgPool2d` and `AdaptiveMaxPool2d`"
+    def __init__(self, size=None):
+        self.size = 1 #size or 
+        self.ap = nn.AdaptiveAvgPool2d(self.size)
+        self.mp = nn.AdaptiveMaxPool2d(self.size)
+    def forward(self, x): return torch.cat([self.mp(x), self.ap(x)], 1)
 
-# https://github.com/lucidrains/vit-pytorch
-class Densenet121(nn.Module):
-    def __init__(self,in_chans = 3, class_n=28):
+class resnet34(nn.Module):
+    def __init__(self, class_n=28):
         super().__init__()
-        self.model = timm.create_model('densenet121', pretrained=True, num_classes=class_n, in_chans= in_chans,)
-        
-        # self.model.global_pool = nn.Sequential(nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.AdaptiveMaxPool2d(output_size=(1, 1)))
-        w = self.model.features.conv0.weight
-        self.model.features.conv0 = nn.Conv2d(4, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        self.model.features.conv0.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(64,1,7,7)),dim=1))
-        
-        
-#         self.model.fc = nn.Sequential(nn.Dropout(0.5), nn.Linear(in_features= 1024, out_features= 28, bias = True))
-        self.model.classifier = nn.Sequential(
-                        nn.BatchNorm1d(1024, eps=1e-05, momentum= 0.1, affine= True, track_running_stats=True),
-                        nn.ReLU(),nn.Dropout(0.5),nn.Linear(in_features= 1024, out_features= 28, bias= True),
-                        )
+        self.model = timm.create_model('resnet34', pretrained=True, num_classes=28, in_chans= 3)
+        # b3 pretrained input size = 300
+        w = self.model.conv1.weight
+        self.model.conv1 = nn.Conv2d(4, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        self.model.conv1.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(64,1,7,7)),dim=1))
 
+        self.conv1 = self.model.conv1
+        self.bn1 = self.model.bn1
+        self.act1 = self.model.act1
+        self.maxpool = self.model.maxpool
+        self.layer1 = self.model.layer1
+        self.layer2 = self.model.layer2
+        self.layer3 = self.model.layer3
+        self.layer4 = self.model.layer4
+
+        self.ap = nn.AdaptiveAvgPool2d(output_size= (1, 1))
+        self.mp = nn.AdaptiveMaxPool2d(output_size= (1, 1))
+        self.fc = nn.Sequential(
+                                    nn.Flatten(),
+                                    nn.BatchNorm1d(1024, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+                                    nn.Dropout(p=0.5),
+                                    nn.Linear(in_features=1024, out_features=512, bias=True),
+                                    nn.ReLU(),
+                                    nn.BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+                                    nn.Dropout(0,5),
+                                    nn.Linear(in_features= 512, out_features= 28, bias= True),
+                                    )
+        # self.fc = ArcMarginProduct(in_features= 1536, out_features= 28,)
     def forward(self, x):
-
-        x = self.model(x)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.act1(x)
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = torch.cat([self.ap(x), self.mp(x)],1)
+        x = self.fc(x)
         return x
-# ===========================================================================================
-# 8개까지 freeze()
-# requires_grad = False
-# for idx, params in enumerate(model.parameters()):
-#    if idx <= (155 - 8):
-#        params.requires_grad = False
 
-# for i in filter(lambda p: p.requires_grad, model.parameters()):
-#    print(i.requires_grad)
-# ===========================================================================================
-
-# https://becominghuman.ai/investigating-focal-and-dice-loss-for-the-kaggle-2018-data-science-bowl-65fb9af4f36c
-# https://arxiv.org/pdf/1708.02002.pdf
-# 데이터 불균형에 적합한 loss funtion을 선택  1:10, 1000에 굉장히 유리하다는 평가가 있음.
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2):
         super().__init__()
@@ -319,9 +373,8 @@ class FocalLoss(nn.Module):
 
         invprobs = F.logsigmoid(-input * (target * 2.0 - 1.0))
         loss = (invprobs * self.gamma).exp() * loss
-        
         return loss.sum(dim=1).mean()
-
+        
 class Arcfaceloss(nn.Module):
     def __init__(self, s=30.0, 
                  m=0.50, easy_margin=False, ls_eps=0.0, target_size= 28):
@@ -357,10 +410,9 @@ class Arcfaceloss(nn.Module):
         # -------------torch.where(out_i = {x_i if condition_i else y_i) ------------
         output = (target * phi) + ((1.0 - target) * cosine)
         output *= self.s
-
+        
         return output
 
-# https://gaussian37.github.io/dl-pytorch-lr_scheduler/ 블로그 참조
 class CosineAnnealingWarmUpRestarts(_LRScheduler):
     def __init__(self, optimizer, T_0, T_mult=1, eta_max=0.1, T_up=0, gamma=1., last_epoch=-1):
         if T_0 <= 0 or not isinstance(T_0, int):
@@ -416,28 +468,39 @@ class CosineAnnealingWarmUpRestarts(_LRScheduler):
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
 
-# AdamW : 컴퓨터 비젼 task에서는 momentum을 포함한 SGD에 비해 일반화(generalization)가 많이 뒤쳐진다는 결과들이 있고
-# 멀티 클래스, 멀티 레이블, 클래스 불균형으로 인한 일반화에 더 집중된 옵티마이저가 유리하다고 판단.
-
-# 참고문헌 : https://hiddenbeginner.github.io/deeplearning/paperreview/2019/12/29/paper_review_AdamW.html
-     
-# lr finder 로 찾은 lr을 적용
-
-# optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr = 3.51E-04)
-# optimizer = torch.optim.SGD(model.parameters(), lr = 1.75E-04, momentum=0.9)
-# optimizer = SWA(optimizer, swa_start=10, swa_freq=5, swa_lr=1e-5)
-# model logit값 sigmoid로 0~1값 변환
 def sigmoid_np(x):
     return 1.0/(1.0 + np.exp(-x))
 
+def warm_up(model, loss_fn, arc_fn, optimizer):
+    for idx, params in enumerate(model.parameters()):
+        idx = idx
 
-# 초기 값은 0.4  -> model이 학습한 후 예측값을 기준으로 True 데이터 비율이 높고 False 데이터 비율이 낮은 최적의 Thresholds값을
-# labels 별로 각각 28개 구해서 진행
+    idx_max = idx
+    for idx, params in enumerate(model.parameters()):
+        if idx <= (idx_max - 8):
+            params.requires_grad = False
 
+    for i in filter(lambda p: p.requires_grad, model.parameters()):
+        print(i.requires_grad)
+    print("====================warm up ======================")
+    for warmup in range(2):
+        model.train()
+        for inputs, targets in tqdm(trn_loader(0)):
+            inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
+            targets = targets.cuda() #정답 데이터
 
-# unfreeze() 파라미터 requires_grad all true
-# for idx, params in enumerate(model.parameters()):
-#    params.requires_grad = True
+            # with torch.cuda.amp.autocast(enabled=True):
+            logits = model(inputs) # 결과값
+            # 순전파 + 역전파 + 최적화
+            arc = arc_fn(logits, targets)
+            loss = loss_fn(arc,  targets.float())
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+    # unfreeze()
+    for idx, params in enumerate(model.parameters()):
+        params.requires_grad = True
+    return model, optimizer
 
 def save_pred(pred, th=0.4, fname= 'model_name'):
     pred_list = []
@@ -449,36 +512,28 @@ def save_pred(pred, th=0.4, fname= 'model_name'):
     submit.to_csv(f'../outputs/{fname}.csv',  index=False)
 
 if __name__ ==  "__main__" :
-    # 학습전 최적의 lr find
-    # from torch_lr_finder import LRFinder
-    # model = Densenet121()
-    # model = model.cuda()
-    # loss_fn = FocalLoss()
-
-    # optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-8, weight_decay=1e-2)
-    # lr_finder = LRFinder(model, optimizer, loss_fn, device="cuda")
-    # lr_finder.range_test(trn_loader(0), end_lr=100, num_iter=100)
-    # lr_finder.plot() # to inspect the loss-learning rate graph
-    # lr_finder.reset() # to reset the model and optimizer to their initial state
 
     Thresholds = 0.4
-    model = Densenet121()
+    model = resnet34()
     model = model.cuda()
-    loss_fn = FocalLoss()
-    loss_fn2 = Arcfaceloss()
+    arc_fn = Arcfaceloss()
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+
     optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-08)
-    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=5.0E-04,  T_up=0, gamma=0.1)
+    # optimizer = SWA(optimizer)
+    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 10, T_mult=1, eta_max=5.0E-03,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
     gc.collect()
 
-    scheduler_start_ep= 30
+    model, optimizer = warm_up(model, loss_fn, arc_fn, optimizer)
+
     best_score = -1
     final_score = []
     early_stop = np.inf
-    step = 0
+    early_step = 0
     lrs = []
-    epoch = 80
-    title= "DN_TTA_ARC"
+    epoch = 100
+    title= "Resnet34_TTA"
 
     for ep in range(epoch):
         train_loss = []
@@ -495,13 +550,11 @@ if __name__ ==  "__main__" :
 
             # 변화도(Gradient) 매개변수를 0
             optimizer.zero_grad()
-            logits = model(inputs.float()) # 결과값
-            
-            
+            logits = model(inputs) # 결과값
             # 순전파 + 역전파 + 최적화
-            arcloss = loss_fn2(logits, targets)
-            loss = loss_fn(arcloss,  targets.float())
+            arc = arc_fn(logits, targets)
 
+            loss = loss_fn(arc,  targets.float())
             loss.backward()
             optimizer.step()
 
@@ -513,26 +566,29 @@ if __name__ ==  "__main__" :
                 inputs = inputs.cuda()
                 targets = targets.cuda()
 
-                logits = model(inputs.float())
-                
-                arcloss = loss_fn2(logits, targets)
-                loss = loss_fn(arcloss, targets.float())
+                logits = model(inputs)
 
+                loss = loss_fn(logits, targets.float())
 
                 val_loss.append(loss.item())
 
                 # 정답 비교 code
                 pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-                F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
-                final_score.append(F1_score)
+                # acc = acc(preds= sigmoid_np(logits.cpu().detach().numpy()), targs= targets.cpu(), thresh= Thresholds)
+                # F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
+
+                acc =  (pred == targets.cpu().numpy()).mean()
+                final_score.append(acc)
 
         Val_loss_ = np.mean(val_loss)
         Train_loss_ = np.mean(train_loss)
         Final_score_ = np.mean(final_score)
-        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; f1_score: {Final_score_:.5f}')
+        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; acc_score: {Final_score_:.5f}')
 
-        if step >= 1:
+        if early_step >= 1:
             scheduler.step()
+            # optimizer.update_swa()
+
         lrs.append(optimizer.param_groups[0]['lr'])
         print("lr: ", optimizer.param_groups[0]['lr'])
 
@@ -550,43 +606,25 @@ if __name__ ==  "__main__" :
         elif (early_stop < Val_loss_):
             early_count += 1
 
-
         if early_count == 5:
-            print("step start")
-            step += 1
-            early_count = 0
-
-
-        if step == 3:
-            print('early stop!!!')
+            early_step += 1
+            print('first early stop!!!')
             torch.save(state_dict, f"../model/{best_model}_last.pt")
+
+        if early_step == 3:
             break
-        gc.collect()
 
     # optimizer.swap_swa_sgd()
 
-    # https://arxiv.org/abs/2106.10270  모델 선택 참고 논문
-    # 레귤라이제이션 의 비효율
-    # 데이터의 양이 많은 것이 학습된 모델이 더 효과적임
-    # # Model load
-    # best_model= 'DN_4ch_TTA__48ep'
+    # best_model= 'Ef_b1_TTA__34ep_last'
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
     print(f"{best_model}_model load!!")
 
     # # Inference
     submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
 
-    # pred = []
-    # for inputs, labels in tqdm(test_loader(submit, is_test= True)):
-    #     model.eval()
-    #     with torch.no_grad():
-    #         inputs = inputs.cuda()
-    #         logits = model(inputs.float())
-    #         pred.append(sigmoid_np(logits.cpu().detach().numpy()))
-
-    # save_pred(pred,Thresholds, best_model)
     stack_pred = []
-    for TTA in tqdm(range(1, 17)):
+    for TTA in tqdm(range(1, 9)):
         pred = []
         for inputs, labels in (test_loader(submit, is_test= True)):
             model.eval()
@@ -599,12 +637,11 @@ if __name__ ==  "__main__" :
         pred = np.array(pred)
         stack_pred.append(pred)
 
-        # if TTA in range(1,17):
-        stack_pred_2 = np.array(stack_pred)    
-        result = np.stack((stack_pred_2), axis= -1)
-        result_max = result.max(axis= -1)
-        # result_mean = result.mean(axis= -1)
-
-        save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTAmax{TTA}')
+        if TTA in (1,4,6,8):
+            stack_pred_2 = np.array(stack_pred)    
+            result = np.stack((stack_pred_2), axis= -1)
+            result_max = result.max(axis= -1)
+            # result_mean = result.mean(axis= -1)
+            save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTA({TTA})')
 # end
 
