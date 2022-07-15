@@ -135,22 +135,9 @@ class HPA_Dataset(Dataset):
     img_id = self.img_ids[index]
 
     if self.is_test == 'test':
-        # img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
-        # img_green_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_green.png')
-        # img_blue_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_blue.png')
-        # img_yellow_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_yellow.png')
-    
-        # img = np.stack([
-        # np.array(img_red_ch),
-        # np.array(img_green_ch),
-        # np.array(img_blue_ch),
-        # np.array(img_yellow_ch),], -1)
-        # label = self.csv.iloc[:,3:-2].iloc[index]
         img_pkl = pd.read_pickle(f'{data_dir}/pickle/{img_id}.pkl')
         img = img_pkl[0]
-        label = img_pkl[1]        
-    #     img = cv2.resize(img, (self.img_height,  self.img_width)).astype(np.uint8)/255
-    #     img = torch.Tensor(img).permute(2,0,1).numpy()
+        label = [0]
     else:
         img_pkl = pd.read_pickle(f'{data_dir}/pickle/{img_id}.pkl')
         img = img_pkl[0]
@@ -162,7 +149,7 @@ class HPA_Dataset(Dataset):
 
     return img.float(), np.array(label)
 
-crop_size= 256
+crop_size= 300
 # # Define augmentations
 train_aug = A.Compose([
     # A.Resize(crop_size, crop_size),
@@ -209,7 +196,7 @@ TTA_aug = A.Compose([
     ToTensorV2(),
 ])
 num  = 0 
-batch_size= 64
+batch_size= 16
 def trn_dataset(num, is_test= False):
     trn_dataset = HPA_Dataset(csv =  df_train.iloc[trn_idx],
                                  img_height = HEIGHT,
@@ -313,46 +300,43 @@ class AdaptiveConcatPool2d(nn.Module):
         self.mp = nn.AdaptiveMaxPool2d(self.size)
     def forward(self, x): return torch.cat([self.mp(x), self.ap(x)], 1)
 
-class resnet34(nn.Module):
+class Efficientnet_v2_b3(nn.Module):
     def __init__(self, class_n=28):
         super().__init__()
-        self.model = timm.create_model('resnet34', pretrained=True, num_classes=28, in_chans= 3)
+        self.model = timm.create_model('tf_efficientnetv2_b3', pretrained=True, num_classes=28, in_chans= 3)
         # b3 pretrained input size = 300
-        w = self.model.conv1.weight
-        self.model.conv1 = nn.Conv2d(4, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        self.model.conv1.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(64,1,7,7)),dim=1))
+        w = self.model.conv_stem.weight
+        self.model.conv_stem = nn.Conv2d(4, 40, kernel_size=(3, 3), stride=(2, 2), bias=False)
+        self.model.conv_stem.weight = torch.nn.Parameter(torch.cat((w,torch.zeros(40,1,3,3)),dim=1))
 
-        self.conv1 = self.model.conv1
+        self.conv_stem = self.model.conv_stem
         self.bn1 = self.model.bn1
         self.act1 = self.model.act1
-        self.maxpool = self.model.maxpool
-        self.layer1 = self.model.layer1
-        self.layer2 = self.model.layer2
-        self.layer3 = self.model.layer3
-        self.layer4 = self.model.layer4
+        self.blocks = self.model.blocks
+        self.conv_head = self.model.conv_head
+        self.bn2 = self.model.bn2
+        self.act2 = self.model.act2
 
         self.ap = nn.AdaptiveAvgPool2d(output_size= (1, 1))
         self.mp = nn.AdaptiveMaxPool2d(output_size= (1, 1))
         self.fc = nn.Sequential(
                                     nn.Flatten(),
-                                    nn.BatchNorm1d(1024, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+                                    nn.BatchNorm1d(1536*2, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
                                     nn.Dropout(p=0.5),
-                                    nn.Linear(in_features=1024, out_features=512, bias=True),
+                                    nn.Linear(in_features=1536*2, out_features=1536, bias=True),
                                     nn.ReLU(),
-                                    nn.BatchNorm1d(512, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+                                    nn.BatchNorm1d(1536, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
                                     nn.Dropout(0,5),
-                                    nn.Linear(in_features= 512, out_features= 28, bias= True),
+                                    nn.Linear(in_features= 1536, out_features= 28, bias= True),
                                     )
-        # self.fc = ArcMarginProduct(in_features= 1536, out_features= 28,)
     def forward(self, x):
-        x = self.conv1(x)
+        x = self.conv_stem(x)
         x = self.bn1(x)
         x = self.act1(x)
-        x = self.maxpool(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+        x = self.blocks(x)
+        x = self.conv_head(x)
+        x = self.bn2(x)
+        x = self.act2(x)
         x = torch.cat([self.ap(x), self.mp(x)],1)
         x = self.fc(x)
         return x
@@ -494,8 +478,8 @@ def warm_up(model, loss_fn, optimizer):
             # 순전파 + 역전파 + 최적화
             loss = loss_fn(logits,  targets.float())
             loss.backward()
-            optimizer.optimizer.step()
-            optimizer.optimizer.zero_grad()
+            optimizer.step()
+            optimizer.zero_grad()
     # unfreeze()
     for idx, params in enumerate(model.parameters()):
         params.requires_grad = True
@@ -513,112 +497,114 @@ def save_pred(pred, th=0.4, fname= 'model_name'):
 if __name__ ==  "__main__" :
 
     Thresholds = 0.4
-    model = resnet34()
+    model = Efficientnet_v2_b3()
     model = model.cuda()
     # arc_fn = Arcfaceloss()
-    loss_fn = torch.nn.BCEWithLogitsLoss()
+    # loss_fn = torch.nn.BCEWithLogitsLoss()
+    loss_fn = FocalLoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-07)
-    optimizer = SWA(optimizer, swa_start= 30, swa_freq= 5, swa_lr= 5.0E-05)
+    # optimizer = SWA(optimizer, swa_start= 30, swa_freq= 5, swa_lr= 5.0E-05)
     scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=5.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
     gc.collect()
 
-    # model, optimizer = warm_up(model, loss_fn, optimizer)
+    
 
-    # best_score = -1
-    # final_score = []
-    # early_stop = np.inf
-    # early_step = 0
-    # lrs = []
-    # label_size = 28
-    # ls_eps = 0.2
-    # epoch = 50
-    # title= "Resnet34_smooth"
+    best_score = -1
+    final_score = []
+    early_stop = np.inf
+    early_step = 0
+    lrs = []
+    label_size = 28
+    ls_eps = 0
+    epoch = 50
+    title= "EfficV2_b3_Focal"
 
-    # for ep in range(epoch):
-    #     train_loss = []
-    #     val_loss = []
-    #     val_true = []
-    #     val_pred = []
+    model, optimizer = warm_up(model, loss_fn, optimizer)
+    for ep in range(epoch):
+        train_loss = []
+        val_loss = []
+        val_true = []
+        val_pred = []
 
-    #     print(f'======================== {ep} Epoch train start ========================')
-    #     model.train()
-    #     for inputs, targets in tqdm(trn_loader(0)):
+        print(f'======================== {ep} Epoch train start ========================')
+        model.train()
+        for inputs, targets in tqdm(trn_loader(0)):
 
-    #         inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
-    #         targets = targets.cuda() #정답 데이터
+            inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
+            targets = targets.cuda() #정답 데이터
 
-    #         # 변화도(Gradient) 매개변수를 0
-    #         optimizer.optimizer.zero_grad()
-    #         logits = model(inputs) # 결과값
-    #         # 순전파 + 역전파 + 최적화
-    #         if ls_eps > 0:
-    #             label_smoothing = (1 - ls_eps) * targets + ls_eps / label_size
-    #         else :
-    #             label_smoothing = targets
-    #         loss = loss_fn(logits,  label_smoothing.float())
-    #         loss.backward()
-    #         optimizer.optimizer.step()
+            # 변화도(Gradient) 매개변수를 0
+            optimizer.zero_grad()
+            logits = model(inputs) # 결과값
+            # 순전파 + 역전파 + 최적화
+            if ls_eps > 0:
+                label_smoothing = (1 - ls_eps) * targets + ls_eps / label_size
+            else :
+                label_smoothing = targets
+            loss = loss_fn(logits,  label_smoothing.float())
+            loss.backward()
+            optimizer.step()
 
-    #         train_loss.append(loss.item())
+            train_loss.append(loss.item())
 
-    #     model.eval()
-    #     with torch.no_grad():
-    #         for inputs, targets in tqdm(vld_loader(ep)):
-    #             inputs = inputs.cuda()
-    #             targets = targets.cuda()
+        model.eval()
+        with torch.no_grad():
+            for inputs, targets in tqdm(vld_loader(ep)):
+                inputs = inputs.cuda()
+                targets = targets.cuda()
 
-    #             logits = model(inputs)
+                logits = model(inputs)
 
-    #             loss = loss_fn(logits, targets.float())
+                loss = loss_fn(logits, targets.float())
 
-    #             val_loss.append(loss.item())
+                val_loss.append(loss.item())
 
-    #             # 정답 비교 code
-    #             pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-    #             # acc = acc(preds= sigmoid_np(logits.cpu().detach().numpy()), targs= targets.cpu(), thresh= Thresholds)
-    #             # F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
+                # 정답 비교 code
+                pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
+                # acc = acc(preds= sigmoid_np(logits.cpu().detach().numpy()), targs= targets.cpu(), thresh= Thresholds)
+                # F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
 
-    #             acc =  (pred == targets.cpu().numpy()).mean()
-    #             final_score.append(acc)
+                acc =  (pred == targets.cpu().numpy()).mean()
+                final_score.append(acc)
 
-    #     Val_loss_ = np.mean(val_loss)
-    #     Train_loss_ = np.mean(train_loss)
-    #     Final_score_ = np.mean(final_score)
-    #     print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; acc_score: {Final_score_:.5f}')
+        Val_loss_ = np.mean(val_loss)
+        Train_loss_ = np.mean(train_loss)
+        Final_score_ = np.mean(final_score)
+        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; acc_score: {Final_score_:.5f}')
 
-    #     if early_step >= 1:
-    #         scheduler.step()
-    #         if ep % 5 == 0:
-    #             optimizer.update_swa()
+        if early_step >= 1:
+            scheduler.step()
+            if ep % 5 == 0:
+                optimizer.update_swa()
 
-    #     lrs.append(optimizer.param_groups[0]['lr'])
-    #     print("lr: ", optimizer.param_groups[0]['lr'])
+        lrs.append(optimizer.param_groups[0]['lr'])
+        print("lr: ", optimizer.param_groups[0]['lr'])
 
-    #     if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
-    #         best_score = Final_score_
-    #         early_stop = Val_loss_
-    #         early_count = 0
-    #         state_dict = model.cpu().state_dict()
-    #         model = model.cuda()
-    #         best_ep = ep
-    #         best_model = f'{title}_{best_ep}ep'
-    #         torch.save(state_dict, f"../model/{best_model}.pt")
+        if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
+            best_score = Final_score_
+            early_stop = Val_loss_
+            early_count = 0
+            state_dict = model.cpu().state_dict()
+            model = model.cuda()
+            best_ep = ep
+            best_model = f'{title}_{best_ep}ep'
+            torch.save(state_dict, f"../model/{best_model}.pt")
 
-    #         print('\n SAVE MODEL UPDATE \n\n')
-    #     elif (early_stop < Val_loss_):
-    #         early_count += 1
+            print('\n SAVE MODEL UPDATE \n\n')
+        elif (early_stop < Val_loss_):
+            early_count += 1
 
-    #     if early_count // 5 == 1:
-    #         early_step += 1
-    #         early_count = 0
-    #         print('step start!!! ===================================\n')
-    #         # torch.save(state_dict, f"../model/{best_model}_last.pt")
+        if early_count // 5 == 1:
+            early_step += 1
+            early_count = 0
+            print('step start!!! ===================================\n')
+            # torch.save(state_dict, f"../model/{best_model}_last.pt")
 
-    #     if early_step == 3:
-    #         print('early stop ======================================')
-    #         break
+        if early_step == 3:
+            print('early stop ======================================')
+            break
 
     # optimizer.swap_swa_sgd()
     # state_dict = model.cpu().state_dict()
@@ -626,7 +612,7 @@ if __name__ ==  "__main__" :
     # torch.save(state_dict, f"../model/{title}_{ep}ep_swa.pt")
     # print("swa model save!")
 
-    best_model= 'Resnet34_TTA_28ep_last'
+    # best_model= 'EfficV2_b3_bce_28ep'
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
     print(f"{best_model}_model load!!")
 
@@ -655,29 +641,29 @@ if __name__ ==  "__main__" :
             save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTA({TTA})')
 # end
 
-    model.load_state_dict(torch.load(f"../model/{title}_{ep}ep_swa.pt"))
-    print(f"{title}_{ep}ep_swa_model load!!")
+    # model.load_state_dict(torch.load(f"../model/{title}_{ep}ep_swa.pt"))
+    # print(f"{title}_{ep}ep_swa_model load!!")
 
-    # # Inference
-    submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
+    # # # Inference
+    # submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
 
-    stack_pred = []
-    for TTA in (range(1, 9)):
-        pred = []
-        for inputs, labels in tqdm(test_loader(submit, is_test= True)):
-            model.eval()
-            with torch.no_grad():
-                inputs = inputs.cuda()
-                logits = model(inputs.float())
-                logits = logits.cpu().detach().numpy()
-                pred.append(logits)
+    # stack_pred = []
+    # for TTA in (range(1, 9)):
+    #     pred = []
+    #     for inputs, labels in tqdm(test_loader(submit, is_test= True)):
+    #         model.eval()
+    #         with torch.no_grad():
+    #             inputs = inputs.cuda()
+    #             logits = model(inputs.float())
+    #             logits = logits.cpu().detach().numpy()
+    #             pred.append(logits)
 
-        pred = np.array(pred)
-        stack_pred.append(pred)
+    #     pred = np.array(pred)
+    #     stack_pred.append(pred)
 
-        if TTA in (1,4,6,8):
-            stack_pred_2 = np.array(stack_pred)    
-            result = np.stack((stack_pred_2), axis= -1)
-            result_max = result.max(axis= -1)
-            # result_mean = result.mean(axis= -1)
-            save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_SWA({TTA})')
+    #     if TTA in (1,4,6,8):
+    #         stack_pred_2 = np.array(stack_pred)    
+    #         result = np.stack((stack_pred_2), axis= -1)
+    #         result_max = result.max(axis= -1)
+    #         # result_mean = result.mean(axis= -1)
+    #         save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_SWA({TTA})')
