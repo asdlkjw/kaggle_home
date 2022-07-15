@@ -471,7 +471,7 @@ class CosineAnnealingWarmUpRestarts(_LRScheduler):
 def sigmoid_np(x):
     return 1.0/(1.0 + np.exp(-x))
 
-def warm_up(model, loss_fn, arc_fn, optimizer):
+def warm_up(model, loss_fn, optimizer):
     for idx, params in enumerate(model.parameters()):
         idx = idx
 
@@ -492,11 +492,10 @@ def warm_up(model, loss_fn, arc_fn, optimizer):
             # with torch.cuda.amp.autocast(enabled=True):
             logits = model(inputs) # 결과값
             # 순전파 + 역전파 + 최적화
-            arc = arc_fn(logits, targets)
-            loss = loss_fn(arc,  targets.float())
+            loss = loss_fn(logits,  targets.float())
             loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
+            optimizer.optimizer.step()
+            optimizer.optimizer.zero_grad()
     # unfreeze()
     for idx, params in enumerate(model.parameters()):
         params.requires_grad = True
@@ -516,24 +515,26 @@ if __name__ ==  "__main__" :
     Thresholds = 0.4
     model = resnet34()
     model = model.cuda()
-    arc_fn = Arcfaceloss()
+    # arc_fn = Arcfaceloss()
     loss_fn = torch.nn.BCEWithLogitsLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-08)
-    # optimizer = SWA(optimizer)
-    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 10, T_mult=1, eta_max=5.0E-03,  T_up=0, gamma=0.1)
+    optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-07)
+    optimizer = SWA(optimizer, swa_start= 30, swa_freq= 5, swa_lr= 5.0E-05)
+    scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=5.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
     gc.collect()
 
-    model, optimizer = warm_up(model, loss_fn, arc_fn, optimizer)
+    model, optimizer = warm_up(model, loss_fn, optimizer)
 
     best_score = -1
     final_score = []
     early_stop = np.inf
     early_step = 0
     lrs = []
-    epoch = 100
-    title= "Resnet34_TTA"
+    label_size = 28
+    ls_eps = 0.2
+    epoch = 50
+    title= "Resnet34_smooth"
 
     for ep in range(epoch):
         train_loss = []
@@ -549,14 +550,16 @@ if __name__ ==  "__main__" :
             targets = targets.cuda() #정답 데이터
 
             # 변화도(Gradient) 매개변수를 0
-            optimizer.zero_grad()
+            optimizer.optimizer.zero_grad()
             logits = model(inputs) # 결과값
             # 순전파 + 역전파 + 최적화
-            arc = arc_fn(logits, targets)
-
-            loss = loss_fn(arc,  targets.float())
+            if ls_eps > 0:
+                label_smoothing = (1 - ls_eps) * targets + ls_eps / label_size
+            else :
+                label_smoothing = targets
+            loss = loss_fn(logits,  label_smoothing.float())
             loss.backward()
-            optimizer.step()
+            optimizer.optimizer.step()
 
             train_loss.append(loss.item())
 
@@ -587,7 +590,8 @@ if __name__ ==  "__main__" :
 
         if early_step >= 1:
             scheduler.step()
-            # optimizer.update_swa()
+            if ep % 5 == 0:
+                optimizer.update_swa()
 
         lrs.append(optimizer.param_groups[0]['lr'])
         print("lr: ", optimizer.param_groups[0]['lr'])
@@ -610,15 +614,19 @@ if __name__ ==  "__main__" :
             early_step += 1
             early_count = 0
             print('step start!!! ===================================\n')
-            torch.save(state_dict, f"../model/{best_model}_last.pt")
+            # torch.save(state_dict, f"../model/{best_model}_last.pt")
 
         if early_step == 3:
             print('early stop ======================================')
             break
 
-    # optimizer.swap_swa_sgd()
+    optimizer.swap_swa_sgd()
+    state_dict = model.cpu().state_dict()
+    model = model.cuda()
+    torch.save(state_dict, f"../model/{title}_{ep}ep_swa.pt")
+    print("swa model save!")
 
-    # best_model= 'Ef_b1_TTA__34ep_last'
+    # best_model= 'Resnet34_TTA_52_last'
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
     print(f"{best_model}_model load!!")
 
@@ -626,9 +634,9 @@ if __name__ ==  "__main__" :
     submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
 
     stack_pred = []
-    for TTA in tqdm(range(1, 9)):
+    for TTA in (range(1, 9)):
         pred = []
-        for inputs, labels in (test_loader(submit, is_test= True)):
+        for inputs, labels in tqdm(test_loader(submit, is_test= True)):
             model.eval()
             with torch.no_grad():
                 inputs = inputs.cuda()
@@ -647,3 +655,29 @@ if __name__ ==  "__main__" :
             save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTA({TTA})')
 # end
 
+    model.load_state_dict(torch.load(f"../model/{title}_{ep}ep_swa.pt"))
+    print(f"{title}_{ep}ep_swa_model load!!")
+
+    # # Inference
+    submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
+
+    stack_pred = []
+    for TTA in (range(1, 9)):
+        pred = []
+        for inputs, labels in tqdm(test_loader(submit, is_test= True)):
+            model.eval()
+            with torch.no_grad():
+                inputs = inputs.cuda()
+                logits = model(inputs.float())
+                logits = logits.cpu().detach().numpy()
+                pred.append(logits)
+
+        pred = np.array(pred)
+        stack_pred.append(pred)
+
+        if TTA in (1,4,6,8):
+            stack_pred_2 = np.array(stack_pred)    
+            result = np.stack((stack_pred_2), axis= -1)
+            result_max = result.max(axis= -1)
+            # result_mean = result.mean(axis= -1)
+            save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_SWA({TTA})')
