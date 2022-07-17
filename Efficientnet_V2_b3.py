@@ -106,8 +106,8 @@ for i, (trn_idx, vld_idx) in enumerate(mskf.split(X, y)):
 
 df_train["fold"].value_counts()
 
-trn_fold = [i for i in range(4) if i not in [2]]
-vld_fold = [2]
+trn_fold = [i for i in range(4) if i not in [3]]
+vld_fold = [3]
 
 trn_idx = df_train.loc[df_train['fold'].isin(trn_fold)].index
 vld_idx = df_train.loc[df_train['fold'].isin(vld_fold)].index
@@ -500,10 +500,10 @@ if __name__ ==  "__main__" :
     model = Efficientnet_v2_b3()
     model = model.cuda()
     # arc_fn = Arcfaceloss()
-    # loss_fn = torch.nn.BCEWithLogitsLoss()
-    loss_fn = FocalLoss()
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+    # loss_fn = FocalLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-07)
+    optimizer = torch.optim.AdamW(model.parameters(), lr = 1.0E-07)
     # optimizer = SWA(optimizer, swa_start= 30, swa_freq= 5, swa_lr= 5.0E-05)
     scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=5.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
@@ -519,7 +519,7 @@ if __name__ ==  "__main__" :
     label_size = 28
     ls_eps = 0
     epoch = 50
-    title= "EfficV2_b3_Focal"
+    title= "EfficV2_b3_W_fold3"
 
     model, optimizer = warm_up(model, loss_fn, optimizer)
     for ep in range(epoch):
@@ -576,8 +576,6 @@ if __name__ ==  "__main__" :
 
         if early_step >= 1:
             scheduler.step()
-            if ep % 5 == 0:
-                optimizer.update_swa()
 
         lrs.append(optimizer.param_groups[0]['lr'])
         print("lr: ", optimizer.param_groups[0]['lr'])
