@@ -1,4 +1,5 @@
 from cProfile import label
+from tkinter.tix import Tree
 import pandas as pd
 import numpy as np
 import torch
@@ -65,11 +66,19 @@ name_label_dict = {
 index = 0
 HEIGHT = 512
 WIDTH = 512
+pseudo_label = True
 
 data_dir = "../inputs/human-protein-atlas-image-classification/"
 
 
 df_train = pd.read_csv(f'{data_dir}/train.csv')
+
+
+if pseudo_label is not None:
+    pseudo = pseudo = pd.read_csv(f'{data_dir}/ef-Kfold-3.csv')
+    pseudo = pseudo.drop( pseudo[pseudo.Predicted.isnull()].index ).reset_index(drop= True)
+    pseudo.columns = ['Id', 'Target']
+    df_train =  pd.concat([df_train, pseudo]).reset_index(drop= True)
 
 reverse_train_labels = dict((v,k) for k,v in name_label_dict.items())
 
@@ -106,8 +115,8 @@ for i, (trn_idx, vld_idx) in enumerate(mskf.split(X, y)):
 
 df_train["fold"].value_counts()
 
-trn_fold = [i for i in range(4) if i not in [3]]
-vld_fold = [3]
+trn_fold = [i for i in range(4) if i not in [0]]
+vld_fold = [0]
 
 trn_idx = df_train.loc[df_train['fold'].isin(trn_fold)].index
 vld_idx = df_train.loc[df_train['fold'].isin(vld_fold)].index
@@ -519,7 +528,7 @@ if __name__ ==  "__main__" :
     label_size = 28
     ls_eps = 0
     epoch = 50
-    title= "EfficV2_b3_W_fold3"
+    title= "EfficV2_b3_W_fold0_pseudo_"
 
     model, optimizer = warm_up(model, loss_fn, optimizer)
     for ep in range(epoch):
