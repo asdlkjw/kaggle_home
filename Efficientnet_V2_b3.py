@@ -115,8 +115,8 @@ for i, (trn_idx, vld_idx) in enumerate(mskf.split(X, y)):
 
 df_train["fold"].value_counts()
 
-trn_fold = [i for i in range(4) if i not in [1]]
-vld_fold = [1]
+trn_fold = [i for i in range(4) if i not in [3]]
+vld_fold = [3]
 
 trn_idx = df_train.loc[df_train['fold'].isin(trn_fold)].index
 vld_idx = df_train.loc[df_train['fold'].isin(vld_fold)].index
@@ -528,7 +528,7 @@ if __name__ ==  "__main__" :
     label_size = 28
     ls_eps = 0
     epoch = 50
-    title= "EfficV2_b3_W_fold1_pseudo_"
+    title= "EfficV2_b3_W_fold3_pseudo_"
 
     model, optimizer = warm_up(model, loss_fn, optimizer)
     for ep in range(epoch):
