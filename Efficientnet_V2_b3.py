@@ -99,9 +99,9 @@ df_train["number_of_targets"] = df_train.drop(["Id", "Target"],axis=1).sum(axis=
 count_perc = np.round(100 * df_train["number_of_targets"].value_counts() / df_train.shape[0], 2)
 
 # # DataSet Split
-train_files = os.listdir(f"{data_dir}/train")
-test_files = os.listdir(f"{data_dir}/test")
-percentage = np.round(len(test_files) / len(train_files) * 100)
+# train_files = os.listdir(f"{data_dir}/train")
+# test_files = os.listdir(f"{data_dir}/test")
+# percentage = np.round(len(test_files) / len(train_files) * 100)
 
 mskf = MultilabelStratifiedKFold(n_splits= 4, shuffle=True, random_state= 42)
 
@@ -115,8 +115,8 @@ for i, (trn_idx, vld_idx) in enumerate(mskf.split(X, y)):
 
 df_train["fold"].value_counts()
 
-trn_fold = [i for i in range(4) if i not in [0]]
-vld_fold = [0]
+trn_fold = [i for i in range(4) if i not in [1]]
+vld_fold = [1]
 
 trn_idx = df_train.loc[df_train['fold'].isin(trn_fold)].index
 vld_idx = df_train.loc[df_train['fold'].isin(vld_fold)].index
@@ -528,7 +528,7 @@ if __name__ ==  "__main__" :
     label_size = 28
     ls_eps = 0
     epoch = 50
-    title= "EfficV2_b3_W_fold0_pseudo_"
+    title= "EfficV2_b3_W_fold1_pseudo_"
 
     model, optimizer = warm_up(model, loss_fn, optimizer)
     for ep in range(epoch):
