@@ -65,11 +65,18 @@ name_label_dict = {
 index = 0
 HEIGHT = 512
 WIDTH = 512
+pseudo_label = True
 
 data_dir = "../inputs/human-protein-atlas-image-classification/"
 
 
 df_train = pd.read_csv(f'{data_dir}/train.csv')
+
+if pseudo_label is not None:
+    pseudo = pseudo = pd.read_csv(f'{data_dir}/Resnext50_W__70ep_TTA(8).csv')
+    pseudo = pseudo.drop( pseudo[pseudo.Predicted.isnull()].index ).reset_index(drop= True)
+    pseudo.columns = ['Id', 'Target']
+    df_train =  pd.concat([df_train, pseudo]).reset_index(drop= True)
 
 reverse_train_labels = dict((v,k) for k,v in name_label_dict.items())
 
@@ -519,106 +526,106 @@ if __name__ ==  "__main__" :
     loss_fn = torch.nn.BCEWithLogitsLoss()
 
     optimizer = torch.optim.AdamW(model.parameters(), lr = 1.0E-07)
-    optimizer = SWA(optimizer, swa_start= 30, swa_freq= 5, swa_lr= 5.0E-05)
+    # optimizer = SWA(optimizer, swa_start= 30, swa_freq= 5, swa_lr= 5.0E-05)
     scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=5.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
     gc.collect()
 
-    # model, optimizer = warm_up(model, loss_fn, optimizer)
+    model, optimizer = warm_up(model, loss_fn, optimizer)
 
-    # best_score = -1
-    # final_score = []
-    # early_stop = np.inf
-    # early_step = 0
-    # lrs = []
-    # label_size = 28
-    # ls_eps = 0.2
-    # epoch = 50
-    # title= "Resnet34_smooth"
+    best_score = -1
+    final_score = []
+    early_stop = np.inf
+    early_step = 0
+    lrs = []
+    label_size = 28
+    ls_eps = 0.2
+    epoch = 50
+    title= "Resnet34_pseudo_"
 
-    # for ep in range(epoch):
-    #     train_loss = []
-    #     val_loss = []
-    #     val_true = []
-    #     val_pred = []
+    for ep in range(epoch):
+        train_loss = []
+        val_loss = []
+        val_true = []
+        val_pred = []
 
-    #     print(f'======================== {ep} Epoch train start ========================')
-    #     model.train()
-    #     for inputs, targets in tqdm(trn_loader(0)):
+        print(f'======================== {ep} Epoch train start ========================')
+        model.train()
+        for inputs, targets in tqdm(trn_loader(0)):
 
-    #         inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
-    #         targets = targets.cuda() #정답 데이터
+            inputs = inputs.cuda()  # gpu 환경에서 돌아가기 위해 cuda()
+            targets = targets.cuda() #정답 데이터
 
-    #         # 변화도(Gradient) 매개변수를 0
-    #         optimizer.optimizer.zero_grad()
-    #         logits = model(inputs) # 결과값
-    #         # 순전파 + 역전파 + 최적화
-    #         if ls_eps > 0:
-    #             label_smoothing = (1 - ls_eps) * targets + ls_eps / label_size
-    #         else :
-    #             label_smoothing = targets
-    #         loss = loss_fn(logits,  label_smoothing.float())
-    #         loss.backward()
-    #         optimizer.optimizer.step()
+            # 변화도(Gradient) 매개변수를 0
+            optimizer.optimizer.zero_grad()
+            logits = model(inputs) # 결과값
+            # 순전파 + 역전파 + 최적화
+            if ls_eps > 0:
+                label_smoothing = (1 - ls_eps) * targets + ls_eps / label_size
+            else :
+                label_smoothing = targets
+            loss = loss_fn(logits,  label_smoothing.float())
+            loss.backward()
+            optimizer.optimizer.step()
 
-    #         train_loss.append(loss.item())
+            train_loss.append(loss.item())
 
-    #     model.eval()
-    #     with torch.no_grad():
-    #         for inputs, targets in tqdm(vld_loader(ep)):
-    #             inputs = inputs.cuda()
-    #             targets = targets.cuda()
+        model.eval()
+        with torch.no_grad():
+            for inputs, targets in tqdm(vld_loader(ep)):
+                inputs = inputs.cuda()
+                targets = targets.cuda()
 
-    #             logits = model(inputs)
+                logits = model(inputs)
 
-    #             loss = loss_fn(logits, targets.float())
+                loss = loss_fn(logits, targets.float())
 
-    #             val_loss.append(loss.item())
+                val_loss.append(loss.item())
 
-    #             # 정답 비교 code
-    #             pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
-    #             # acc = acc(preds= sigmoid_np(logits.cpu().detach().numpy()), targs= targets.cpu(), thresh= Thresholds)
-    #             # F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
+                # 정답 비교 code
+                pred = np.where(sigmoid_np(logits.cpu().detach().numpy()) > Thresholds, 1, 0)
+                # acc = acc(preds= sigmoid_np(logits.cpu().detach().numpy()), targs= targets.cpu(), thresh= Thresholds)
+                # F1_score = f1_score(targets.cpu().numpy(), pred , average='macro')
 
-    #             acc =  (pred == targets.cpu().numpy()).mean()
-    #             final_score.append(acc)
+                acc =  (pred == targets.cpu().numpy()).mean()
+                final_score.append(acc)
 
-    #     Val_loss_ = np.mean(val_loss)
-    #     Train_loss_ = np.mean(train_loss)
-    #     Final_score_ = np.mean(final_score)
-    #     print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; acc_score: {Final_score_:.5f}')
+        Val_loss_ = np.mean(val_loss)
+        Train_loss_ = np.mean(train_loss)
+        Final_score_ = np.mean(final_score)
+        print(f'train_loss : {Train_loss_:.5f}; val_loss: {Val_loss_:.5f}; acc_score: {Final_score_:.5f}')
 
-    #     if early_step >= 1:
-    #         scheduler.step()
-    #         if ep % 5 == 0:
-    #             optimizer.update_swa()
+        if early_step >= 1:
+            scheduler.step()
+            # if ep % 5 == 0:
+            #     optimizer.update_swa()
 
-    #     lrs.append(optimizer.param_groups[0]['lr'])
-    #     print("lr: ", optimizer.param_groups[0]['lr'])
+        lrs.append(optimizer.param_groups[0]['lr'])
+        print("lr: ", optimizer.param_groups[0]['lr'])
 
-    #     if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
-    #         best_score = Final_score_
-    #         early_stop = Val_loss_
-    #         early_count = 0
-    #         state_dict = model.cpu().state_dict()
-    #         model = model.cuda()
-    #         best_ep = ep
-    #         best_model = f'{title}_{best_ep}ep'
-    #         torch.save(state_dict, f"../model/{best_model}.pt")
+        if  (early_stop > Val_loss_): #(Final_score_ > best_score) or
+            best_score = Final_score_
+            early_stop = Val_loss_
+            early_count = 0
+            state_dict = model.cpu().state_dict()
+            model = model.cuda()
+            best_ep = ep
+            best_model = f'{title}'
+            torch.save(state_dict, f"../model/{best_model}.pt")
 
-    #         print('\n SAVE MODEL UPDATE \n\n')
-    #     elif (early_stop < Val_loss_):
-    #         early_count += 1
+            print('\n SAVE MODEL UPDATE \n\n')
+        elif (early_stop < Val_loss_):
+            early_count += 1
 
-    #     if early_count // 5 == 1:
-    #         early_step += 1
-    #         early_count = 0
-    #         print('step start!!! ===================================\n')
-    #         # torch.save(state_dict, f"../model/{best_model}_last.pt")
+        if early_count // 5 == 1:
+            early_step += 1
+            early_count = 0
+            print('step start!!! ===================================\n')
+            # torch.save(state_dict, f"../model/{best_model}_last.pt")
 
-    #     if early_step == 3:
-    #         print('early stop ======================================')
-    #         break
+        if early_step == 3:
+            print('early stop ======================================')
+            break
 
     # optimizer.swap_swa_sgd()
     # state_dict = model.cpu().state_dict()
@@ -626,7 +633,7 @@ if __name__ ==  "__main__" :
     # torch.save(state_dict, f"../model/{title}_{ep}ep_swa.pt")
     # print("swa model save!")
 
-    best_model= 'Resnet34_TTA_28ep_last'
+    # best_model= 'Resnet34_TTA_28ep_last'
     model.load_state_dict(torch.load(f"../model/{best_model}.pt"))
     print(f"{best_model}_model load!!")
 
@@ -655,29 +662,29 @@ if __name__ ==  "__main__" :
             save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_TTA({TTA})')
 # end
 
-    model.load_state_dict(torch.load(f"../model/{title}_{ep}ep_swa.pt"))
-    print(f"{title}_{ep}ep_swa_model load!!")
+    # model.load_state_dict(torch.load(f"../model/{title}_{ep}ep_swa.pt"))
+    # print(f"{title}_{ep}ep_swa_model load!!")
 
-    # # Inference
-    submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
+    # # # Inference
+    # submit = pd.read_csv(f'{data_dir}/sample_submission.csv')
 
-    stack_pred = []
-    for TTA in (range(1, 9)):
-        pred = []
-        for inputs, labels in tqdm(test_loader(submit, is_test= True)):
-            model.eval()
-            with torch.no_grad():
-                inputs = inputs.cuda()
-                logits = model(inputs.float())
-                logits = logits.cpu().detach().numpy()
-                pred.append(logits)
+    # stack_pred = []
+    # for TTA in (range(1, 9)):
+    #     pred = []
+    #     for inputs, labels in tqdm(test_loader(submit, is_test= True)):
+    #         model.eval()
+    #         with torch.no_grad():
+    #             inputs = inputs.cuda()
+    #             logits = model(inputs.float())
+    #             logits = logits.cpu().detach().numpy()
+    #             pred.append(logits)
 
-        pred = np.array(pred)
-        stack_pred.append(pred)
+    #     pred = np.array(pred)
+    #     stack_pred.append(pred)
 
-        if TTA in (1,4,6,8):
-            stack_pred_2 = np.array(stack_pred)    
-            result = np.stack((stack_pred_2), axis= -1)
-            result_max = result.max(axis= -1)
-            # result_mean = result.mean(axis= -1)
-            save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_SWA({TTA})')
+    #     if TTA in (1,4,6,8):
+    #         stack_pred_2 = np.array(stack_pred)    
+    #         result = np.stack((stack_pred_2), axis= -1)
+    #         result_max = result.max(axis= -1)
+    #         # result_mean = result.mean(axis= -1)
+    #         save_pred(sigmoid_np(result_max) ,Thresholds, best_model + f'_SWA({TTA})')
