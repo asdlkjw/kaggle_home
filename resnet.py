@@ -518,7 +518,7 @@ if __name__ ==  "__main__" :
     # arc_fn = Arcfaceloss()
     loss_fn = torch.nn.BCEWithLogitsLoss()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr = 1.0E-07)
+    optimizer = torch.optim.AdamW(model.parameters(), lr = 1.0E-07)
     optimizer = SWA(optimizer, swa_start= 30, swa_freq= 5, swa_lr= 5.0E-05)
     scheduler = CosineAnnealingWarmUpRestarts(optimizer, T_0= 5, T_mult=1, eta_max=5.0E-04,  T_up=0, gamma=0.1)
     torch.cuda.empty_cache()
