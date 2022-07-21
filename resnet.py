@@ -113,8 +113,8 @@ for i, (trn_idx, vld_idx) in enumerate(mskf.split(X, y)):
 
 df_train["fold"].value_counts()
 
-trn_fold = [i for i in range(4) if i not in [0]]
-vld_fold = [0]
+trn_fold = [i for i in range(4) if i not in [1]]
+vld_fold = [1]
 
 trn_idx = df_train.loc[df_train['fold'].isin(trn_fold)].index
 vld_idx = df_train.loc[df_train['fold'].isin(vld_fold)].index
@@ -528,7 +528,7 @@ if __name__ ==  "__main__" :
     label_size = 28
     ls_eps = 0.2
     epoch = 100
-    title= "Resnet34_pseudo_kfold(0)"
+    title= "Resnet34_pseudo_kfold(1)"
 
     for ep in range(epoch):
         train_loss = []
