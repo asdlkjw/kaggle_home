@@ -73,7 +73,7 @@ data_dir = "../inputs/human-protein-atlas-image-classification/"
 df_train = pd.read_csv(f'{data_dir}/train.csv')
 
 if pseudo_label is not None:
-    pseudo = pseudo = pd.read_csv(f'{data_dir}/Resnext50_W__70ep_TTA(8).csv')
+    pseudo = pseudo = pd.read_csv(f'{data_dir}/ef-Kfold-3.csv')
     pseudo = pseudo.drop( pseudo[pseudo.Predicted.isnull()].index ).reset_index(drop= True)
     pseudo.columns = ['Id', 'Target']
     df_train =  pd.concat([df_train, pseudo]).reset_index(drop= True)
@@ -113,8 +113,8 @@ for i, (trn_idx, vld_idx) in enumerate(mskf.split(X, y)):
 
 df_train["fold"].value_counts()
 
-trn_fold = [i for i in range(4) if i not in [2]]
-vld_fold = [2]
+trn_fold = [i for i in range(4) if i not in [0]]
+vld_fold = [0]
 
 trn_idx = df_train.loc[df_train['fold'].isin(trn_fold)].index
 vld_idx = df_train.loc[df_train['fold'].isin(vld_fold)].index
@@ -142,22 +142,10 @@ class HPA_Dataset(Dataset):
     img_id = self.img_ids[index]
 
     if self.is_test == 'test':
-        # img_red_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_red.png')
-        # img_green_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_green.png')
-        # img_blue_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_blue.png')
-        # img_yellow_ch = Image.open(f'{data_dir}/{self.is_test}/{img_id}'+'_yellow.png')
-    
-        # img = np.stack([
-        # np.array(img_red_ch),
-        # np.array(img_green_ch),
-        # np.array(img_blue_ch),
-        # np.array(img_yellow_ch),], -1)
-        # label = self.csv.iloc[:,3:-2].iloc[index]
         img_pkl = pd.read_pickle(f'{data_dir}/pickle/{img_id}.pkl')
         img = img_pkl[0]
-        label = img_pkl[1]        
-    #     img = cv2.resize(img, (self.img_height,  self.img_width)).astype(np.uint8)/255
-    #     img = torch.Tensor(img).permute(2,0,1).numpy()
+        label = [0]       
+
     else:
         img_pkl = pd.read_pickle(f'{data_dir}/pickle/{img_id}.pkl')
         img = img_pkl[0]
@@ -481,7 +469,6 @@ def sigmoid_np(x):
 def warm_up(model, loss_fn, optimizer):
     for idx, params in enumerate(model.parameters()):
         idx = idx
-
     idx_max = idx
     for idx, params in enumerate(model.parameters()):
         if idx <= (idx_max - 8):
@@ -501,8 +488,8 @@ def warm_up(model, loss_fn, optimizer):
             # 순전파 + 역전파 + 최적화
             loss = loss_fn(logits,  targets.float())
             loss.backward()
-            optimizer.optimizer.step()
-            optimizer.optimizer.zero_grad()
+            optimizer.step()
+            optimizer.zero_grad()
     # unfreeze()
     for idx, params in enumerate(model.parameters()):
         params.requires_grad = True
@@ -540,8 +527,8 @@ if __name__ ==  "__main__" :
     lrs = []
     label_size = 28
     ls_eps = 0.2
-    epoch = 50
-    title= "Resnet34_pseudo_"
+    epoch = 100
+    title= "Resnet34_pseudo_kfold(0)"
 
     for ep in range(epoch):
         train_loss = []
@@ -557,7 +544,7 @@ if __name__ ==  "__main__" :
             targets = targets.cuda() #정답 데이터
 
             # 변화도(Gradient) 매개변수를 0
-            optimizer.optimizer.zero_grad()
+            optimizer.zero_grad()
             logits = model(inputs) # 결과값
             # 순전파 + 역전파 + 최적화
             if ls_eps > 0:
@@ -566,7 +553,7 @@ if __name__ ==  "__main__" :
                 label_smoothing = targets
             loss = loss_fn(logits,  label_smoothing.float())
             loss.backward()
-            optimizer.optimizer.step()
+            optimizer.step()
 
             train_loss.append(loss.item())
 
